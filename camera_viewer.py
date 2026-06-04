@@ -372,19 +372,23 @@ class CameraTile(QWidget):
         pixmap.save(filename)
 
     # --- slots ---
-    def _on_frame(self, arr: np.ndarray):
-        h, w = arr.shape
-        display = cv2.resize(
-            arr,
-            (self.video_label.width(), self.video_label.height()),
-            interpolation=cv2.INTER_LINEAR
-        )
-        display = np.ascontiguousarray(display)
-        dh, dw = display.shape
-        stride = display.strides[0]
-        qimg = QImage(display.data, dw, dh, stride, QImage.Format_Grayscale8)
-        self.video_label.setPixmap(QPixmap.fromImage(qimg))
-
+   def _on_frame(self, arr: np.ndarray):
+    h, w = arr.shape
+    display = cv2.resize(
+        arr,
+        (self.video_label.width(), self.video_label.height()),
+        interpolation=cv2.INTER_LINEAR
+    )
+    display = np.ascontiguousarray(display)
+    dh, dw = display.shape
+    stride = display.strides[0]
+    qimg = QImage(display.data, dw, dh, stride, QImage.Format_Grayscale8)
+    print(f"[QIMG] isNull={qimg.isNull()} size={qimg.width()}x{qimg.height()}")
+    pix = QPixmap.fromImage(qimg)
+    print(f"[PIX] isNull={pix.isNull()} size={pix.width()}x{pix.height()}")
+    self.video_label.setPixmap(pix)
+    self.video_label.repaint()
+    
     def _on_error(self, msg: str):
         print(f"[CAMERA ERROR] Well {self._well_index + 1}: {msg}")
         self.video_label.setText(f"ERROR\n{msg}")
