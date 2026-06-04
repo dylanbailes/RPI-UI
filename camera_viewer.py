@@ -160,19 +160,19 @@ QLabel#status_label[status="stopped"] {
 # CameraThread — background acquisition using Aravis, one thread per camera
 # ---------------------------------------------------------------------------
 class CameraThread(QThread):
-    frame_ready = pyqtSignal(np.ndarray)
+    frame_ready    = pyqtSignal(np.ndarray)
     error_occurred = pyqtSignal(str)
 
     def __init__(self, camera_id: str, parent=None):
         super().__init__(parent)
-        self._camera_id = camera_id   # Aravis device ID string
-        self._running = False
-        self._mutex = QMutex()
-        self._exposure_us = 5000      # microseconds
-        self._gain = 0.0
-        self._target_fps = 10
+        self._camera_id   = camera_id
+        self._running     = False
+        self._mutex       = QMutex()
+        self._exposure_us = 5000
+        self._gain        = 0.0
+        self._target_fps  = 10
 
-    # --- public control ---
+    # --- public control (safe to call from UI thread) ---
     def set_exposure(self, us: int):
         with QMutexLocker(self._mutex):
             self._exposure_us = us
@@ -200,9 +200,9 @@ class CameraThread(QThread):
 
         try:
             with QMutexLocker(self._mutex):
-                exp = self._exposure_us
+                exp  = self._exposure_us
                 gain = self._gain
-                fps = self._target_fps
+                fps  = self._target_fps
 
             camera.set_exposure_time(float(exp))
             camera.set_gain(float(gain))
@@ -212,7 +212,9 @@ class CameraThread(QThread):
                 pass
 
             payload = camera.get_payload()
-            stream = camera.create_stream(None, None)
+            stream  = camera.create_stream(None, None)
+
+            # Pre-allocate 4 buffers to keep the stream fed
             for _ in range(4):
                 stream.push_buffer(Aravis.Buffer.new_allocate(payload))
 
@@ -220,8 +222,9 @@ class CameraThread(QThread):
             self._running = True
 
             while self._running:
+                # Apply any mid-stream setting changes
                 with QMutexLocker(self._mutex):
-                    new_exp = self._exposure_us
+                    new_exp  = self._exposure_us
                     new_gain = self._gain
 
                 try:
@@ -236,10 +239,30 @@ class CameraThread(QThread):
                     continue
 
                 if buf.get_status() == Aravis.BufferStatus.SUCCESS:
-                    data = buf.get_data()
-                    width = buf.get_image_width()
-                    height = buf.get_image_height()
-                    arr = np.frombuffer(data, dtype=np.uint8).reshape((height, width))
+                    data         = buf.get_data()
+                    width        = buf.get_image_width()
+                    height       = buf.get_image_height()
+                    pixel_format = buf.get_image_pixel_format()
+
+                    # Debug info on first frame — visible in terminal
+                    # Remove these print lines once camera is confirmed working
+                    print(f"[DEBUG] fmt={hex(pixel_format)} "
+                          f"w={width} h={height} "
+                          f"data_len={len(data)} "
+                          f"expected_mono8={width*height} "
+                          f"expected_mono16={width*height*2}")
+
+                    # Handle Mono16 (0x01100007) and Mono8 (0x01080001)
+                    if pixel_format == Aravis.PIXEL_FORMAT_MONO_16:
+                        arr = np.frombuffer(data, dtype=np.uint16).reshape(
+                            (height, width))
+                        # Scale 16-bit to 8-bit for display
+                        arr = (arr >> 8).astype(np.uint8)
+                    else:
+                        # Default: treat as Mono8
+                        arr = np.frombuffer(data, dtype=np.uint8).reshape(
+                            (height, width))
+
                     self.frame_ready.emit(arr.copy())
 
                 stream.push_buffer(buf)
@@ -259,12 +282,11 @@ class CameraThread(QThread):
 class CameraTile(QWidget):
     def __init__(self, well_index: int, camera_id: str | None, parent=None):
         super().__init__(parent)
-        self._well_index = well_index
-        self._camera_id = camera_id
+        self._well_index   = well_index
+        self._camera_id    = camera_id
         self._thread: CameraThread | None = None
         self._snapshot_dir = os.path.expanduser("~/mccb_snapshots")
         os.makedirs(self._snapshot_dir, exist_ok=True)
-
         self._build_ui()
 
     def _build_ui(self):
@@ -272,22 +294,23 @@ class CameraTile(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # --- header bar ---
+        # header bar
         header = QLabel(f"WELL {self._well_index + 1:02d}")
         header.setObjectName("tile_header")
         header.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         layout.addWidget(header)
 
-        # --- video display ---
+        # video display
         self.video_label = QLabel()
         self.video_label.setObjectName("video_label")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setText("NO SIGNAL")
         self.video_label.setMinimumSize(320, 240)
-        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video_label.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self.video_label, stretch=1)
 
-        # --- status row ---
+        # status row
         status_row = QHBoxLayout()
         status_row.setContentsMargins(4, 2, 4, 2)
         self.status_label = QLabel("STOPPED")
@@ -302,14 +325,14 @@ class CameraTile(QWidget):
             status_row.addWidget(no_cam)
         layout.addLayout(status_row)
 
-        # --- footer buttons ---
+        # footer buttons
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 0, 0, 0)
         footer.setSpacing(0)
 
         self.btn_start = QPushButton("START")
-        self.btn_stop = QPushButton("STOP")
-        self.btn_snap = QPushButton("SNAP")
+        self.btn_stop  = QPushButton("STOP")
+        self.btn_snap  = QPushButton("SNAP")
         self.btn_stop.setObjectName("secondary")
         self.btn_snap.setObjectName("secondary")
 
@@ -364,7 +387,7 @@ class CameraTile(QWidget):
         pixmap = self.video_label.pixmap()
         if pixmap is None or pixmap.isNull():
             return
-        ts = time.strftime("%Y%m%d_%H%M%S")
+        ts       = time.strftime("%Y%m%d_%H%M%S")
         filename = os.path.join(
             self._snapshot_dir,
             f"well{self._well_index + 1:02d}_{ts}.png"
@@ -373,18 +396,24 @@ class CameraTile(QWidget):
 
     # --- slots ---
     def _on_frame(self, arr: np.ndarray):
-        arr = np.ascontiguousarray(arr)
+        # Ensure array is contiguous and fully owned by Python
+        arr = np.ascontiguousarray(arr, dtype=np.uint8)
         h, w = arr.shape
-        qimg = QImage(arr.data, w, h, arr.strides[0], QImage.Format_Grayscale8)
-        pix = QPixmap.fromImage(qimg.copy())  # .copy() detaches from numpy buffer
-        self.video_label.setPixmap(
-            pix.scaled(
-                self.video_label.width(),
-                self.video_label.height(),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation
-            )
+
+        # Build QImage from numpy buffer
+        qimg = QImage(arr.data, w, h, w, QImage.Format_Grayscale8)
+
+        # .copy() creates a Qt-owned deep copy so the numpy buffer
+        # can be safely freed without corrupting the displayed image
+        qimg = qimg.copy()
+
+        pix = QPixmap.fromImage(qimg).scaled(
+            self.video_label.width(),
+            self.video_label.height(),
+            Qt.KeepAspectRatio,
+            Qt.FastTransformation   # faster than SmoothTransformation on Pi
         )
+        self.video_label.setPixmap(pix)
 
     def _on_error(self, msg: str):
         print(f"[CAMERA ERROR] Well {self._well_index + 1}: {msg}")
@@ -413,13 +442,13 @@ class CameraSettingsPanel(QWidget):
     settings_changed = pyqtSignal(int, float, int)  # exposure_us, gain, fps
 
     EXPOSURE_OPTIONS = [
-        ("500 µs",   500),
-        ("1 ms",    1000),
-        ("2 ms",    2000),
-        ("5 ms",    5000),
-        ("10 ms",  10000),
-        ("20 ms",  20000),
-        ("50 ms",  50000),
+        ("500 µs",    500),
+        ("1 ms",     1000),
+        ("2 ms",     2000),
+        ("5 ms",     5000),
+        ("10 ms",   10000),
+        ("20 ms",   20000),
+        ("50 ms",   50000),
         ("100 ms", 100000),
     ]
     GAIN_OPTIONS = [
@@ -451,8 +480,8 @@ class CameraSettingsPanel(QWidget):
         inner.setSpacing(16)
 
         # exposure
-        exp_group = QGroupBox("EXPOSURE")
-        exp_layout = QVBoxLayout(exp_group)
+        exp_group    = QGroupBox("EXPOSURE")
+        exp_layout   = QVBoxLayout(exp_group)
         self.combo_exposure = QComboBox()
         for label, _ in self.EXPOSURE_OPTIONS:
             self.combo_exposure.addItem(label)
@@ -461,8 +490,8 @@ class CameraSettingsPanel(QWidget):
         inner.addWidget(exp_group)
 
         # gain
-        gain_group = QGroupBox("GAIN")
-        gain_layout = QVBoxLayout(gain_group)
+        gain_group   = QGroupBox("GAIN")
+        gain_layout  = QVBoxLayout(gain_group)
         self.combo_gain = QComboBox()
         for label, _ in self.GAIN_OPTIONS:
             self.combo_gain.addItem(label)
@@ -470,8 +499,8 @@ class CameraSettingsPanel(QWidget):
         inner.addWidget(gain_group)
 
         # fps
-        fps_group = QGroupBox("FRAME RATE")
-        fps_layout = QVBoxLayout(fps_group)
+        fps_group    = QGroupBox("FRAME RATE")
+        fps_layout   = QVBoxLayout(fps_group)
         self.combo_fps = QComboBox()
         for v in self.FPS_OPTIONS:
             self.combo_fps.addItem(f"{v} FPS")
@@ -486,14 +515,13 @@ class CameraSettingsPanel(QWidget):
 
         inner.addStretch()
 
-        # snapshot dir info
-        snap_group = QGroupBox("SNAPSHOTS")
+        # snapshot folder
+        snap_group  = QGroupBox("SNAPSHOTS")
         snap_layout = QVBoxLayout(snap_group)
         snap_dir_label = QLabel("~/mccb_snapshots/")
         snap_dir_label.setWordWrap(True)
         snap_dir_label.setStyleSheet("color: #666666; font-size: 11px;")
         snap_layout.addWidget(snap_dir_label)
-
         self.btn_open_dir = QPushButton("OPEN FOLDER")
         self.btn_open_dir.setObjectName("secondary")
         self.btn_open_dir.clicked.connect(self._open_snapshot_dir)
@@ -507,8 +535,8 @@ class CameraSettingsPanel(QWidget):
 
     def _emit_settings(self):
         exp_us = self.EXPOSURE_OPTIONS[self.combo_exposure.currentIndex()][1]
-        gain = self.GAIN_OPTIONS[self.combo_gain.currentIndex()][1]
-        fps = self.FPS_OPTIONS[self.combo_fps.currentIndex()]
+        gain   = self.GAIN_OPTIONS[self.combo_gain.currentIndex()][1]
+        fps    = self.FPS_OPTIONS[self.combo_fps.currentIndex()]
         self.settings_changed.emit(exp_us, gain, fps)
 
     def _open_snapshot_dir(self):
@@ -518,13 +546,13 @@ class CameraSettingsPanel(QWidget):
 
     def current_settings(self):
         exp_us = self.EXPOSURE_OPTIONS[self.combo_exposure.currentIndex()][1]
-        gain = self.GAIN_OPTIONS[self.combo_gain.currentIndex()][1]
-        fps = self.FPS_OPTIONS[self.combo_fps.currentIndex()]
+        gain   = self.GAIN_OPTIONS[self.combo_gain.currentIndex()][1]
+        fps    = self.FPS_OPTIONS[self.combo_fps.currentIndex()]
         return exp_us, gain, fps
 
 
 # ---------------------------------------------------------------------------
-# CameraViewerWidget — 2×2 grid of tiles + settings panel
+# CameraViewerWidget — 2x2 grid of tiles + settings panel
 # Plug-in compatible: add as a tab in mccb_template_test.py
 # ---------------------------------------------------------------------------
 class CameraViewerWidget(QWidget):
@@ -539,7 +567,7 @@ class CameraViewerWidget(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # --- section header row with EXIT button ---
+        # section header row
         hdr_row = QHBoxLayout()
         hdr_row.setContentsMargins(0, 0, 0, 0)
         hdr_row.setSpacing(0)
@@ -569,21 +597,21 @@ class CameraViewerWidget(QWidget):
         hdr_row.addWidget(self.btn_exit)
         root.addLayout(hdr_row)
 
-        # --- body: grid + panel ---
+        # body: 2x2 grid + settings panel
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
 
-        # 2×2 grid
         camera_ids = self._enumerate_cameras()
         print(f"[DEBUG] Cameras found at init: {camera_ids}")
+
         grid = QGridLayout()
         grid.setSpacing(2)
         grid.setContentsMargins(2, 2, 2, 2)
 
         for i in range(self._num_wells):
             cam_id = camera_ids[i] if i < len(camera_ids) else None
-            tile = CameraTile(well_index=i, camera_id=cam_id)
+            tile   = CameraTile(well_index=i, camera_id=cam_id)
             self._tiles.append(tile)
             row, col = divmod(i, 2)
             grid.addWidget(tile, row, col)
@@ -592,28 +620,25 @@ class CameraViewerWidget(QWidget):
 
         grid_container = QWidget()
         grid_container.setLayout(grid)
-        grid_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        grid_container.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Expanding)
         body.addWidget(grid_container, stretch=1)
 
-        # settings panel
         self.settings_panel = CameraSettingsPanel()
-        self.settings_panel.settings_changed.connect(self._apply_settings_to_all)
+        self.settings_panel.settings_changed.connect(
+            self._apply_settings_to_all)
         body.addWidget(self.settings_panel)
 
         root.addLayout(body, stretch=1)
 
-    # --- exit ---
     def _on_exit(self):
         self.stop_all()
-        # If running standalone, quit the app; if embedded, just stop cameras
         app = QApplication.instance()
         if app:
             app.quit()
 
-    # --- camera enumeration ---
     @staticmethod
     def _enumerate_cameras() -> list[str]:
-        """Return list of Aravis device ID strings."""
         try:
             Aravis.update_device_list()
             count = Aravis.get_n_devices()
@@ -621,12 +646,10 @@ class CameraViewerWidget(QWidget):
         except Exception:
             return []
 
-    # --- settings ---
     def _apply_settings_to_all(self, exposure_us: int, gain: float, fps: int):
         for tile in self._tiles:
             tile.apply_settings(exposure_us, gain, fps)
 
-    # --- cleanup (called from mccb_template_test.py closeEvent) ---
     def stop_all(self):
         for tile in self._tiles:
             tile.cleanup()
