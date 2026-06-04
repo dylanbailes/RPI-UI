@@ -145,7 +145,7 @@ QTabBar::tab {
     letter-spacing: 1px;
     margin-right: 4px;
     min-height: 52px;
-    min-width: 200px; 
+    min-width: 240px; 
 }
 QTabBar::tab:selected {
     background-color: #000000;
@@ -190,6 +190,27 @@ QTextEdit {
 MAX_EFIELD = 1.5    # V/cm
 MAX_MAG    = 15.0   # Gauss
 BAUDRATE   = 115200
+
+# =============================================
+# RPi-Compatible Message Box Helper
+# =============================================
+def show_message(parent, title, text, icon=QMessageBox.Warning, 
+                 buttons=QMessageBox.Ok, auto_close_ms=0):
+    """
+    Show a message box with proper window flags for RPi/Wayland compatibility.
+    If auto_close_ms > 0, the dialog auto-closes after that duration.
+    """
+    msg = QMessageBox(parent)
+    msg.setWindowFlags(Qt.Dialog | Qt.WindowStaysOnTopHint)
+    msg.setIcon(icon)
+    msg.setWindowTitle(title)
+    msg.setText(text)
+    msg.setStandardButtons(buttons)
+    
+    if auto_close_ms > 0:
+        QTimer.singleShot(auto_close_ms, msg.accept)
+    
+    return msg.exec_()
 
 # =============================================
 # Device auto-detection
@@ -512,7 +533,7 @@ class SensorLogWidget(QWidget):
 # =============================================
 class DeviceConnectPanel(QWidget):
     connected = pyqtSignal(dict)
-    exit_requested = pyqtSignal() # New signal to exit from page 0
+    exit_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -563,23 +584,23 @@ class DeviceConnectPanel(QWidget):
         form_layout.addLayout(form)
         layout.addWidget(form_container)
 
-        self.refresh_btn = QPushButton("↺ Refresh Ports")
-        self.refresh_btn.setProperty("variant", "secondary")
-        self.refresh_btn.setMaximumWidth(240)
-        self.refresh_btn.clicked.connect(self._refresh)
-        layout.addWidget(self.refresh_btn)
-
+        # Add note about single/dual device support
         note = QLabel(
-            "Plug in one device at a time if unsure which port is which.\n"
+            "Select the same port for both if using a single ESP32 for electric and magnetic control.\n"
             "ESP32s typically appear as CP210x or CH340."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: #666666; font-size: 13px;")
         layout.addWidget(note)
 
+        self.refresh_btn = QPushButton("↺ Refresh Ports")
+        self.refresh_btn.setProperty("variant", "secondary")
+        self.refresh_btn.setMaximumWidth(240)
+        self.refresh_btn.clicked.connect(self._refresh)
+        layout.addWidget(self.refresh_btn)
+
         layout.addStretch()
 
-        # Bottom row with Exit and Connect
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(16)
         
@@ -621,11 +642,7 @@ class DeviceConnectPanel(QWidget):
         e_port = self.combo_electrode.currentText()
         m_port = self.combo_magnet.currentText()
         
-        if e_port != "(NONE)" and m_port != "(NONE)" and e_port == m_port:
-            QMessageBox.warning(self, "PORT CONFLICT", 
-                "You cannot assign the same serial port to both roles.")
-            return
-
+        # Allow same port for both - single device operation
         result = {}
         if e_port != "(NONE)":
             result["electrode"] = e_port
@@ -633,7 +650,9 @@ class DeviceConnectPanel(QWidget):
             result["magnet"] = m_port
             
         if not result:
-            QMessageBox.warning(self, "NO DEVICE", "Please select at least one device.")
+            show_message(self, "NO DEVICE", 
+                "Please select at least one device.",
+                QMessageBox.Warning)
             return
             
         self.connected.emit(result)
@@ -651,10 +670,9 @@ class MCCB_UI(QWidget):
         self.log_widgets    = {}
         self.stack = QStackedLayout()
 
-        # Page 0: Connection
         self.connect_panel = DeviceConnectPanel()
         self.connect_panel.connected.connect(self._on_devices_connected)
-        self.connect_panel.exit_requested.connect(self._exit_app) # Wire up exit from page 0
+        self.connect_panel.exit_requested.connect(self._exit_app)
         self.stack.addWidget(self.connect_panel)
 
         container = QWidget()
@@ -665,32 +683,48 @@ class MCCB_UI(QWidget):
         self.setLayout(root)
 
     def _on_devices_connected(self, port_map):
-        # Clean up any existing threads if reconfiguring
         for t in self.serial_threads.values():
             try: t.stop()
             except: pass
         self.serial_threads.clear()
         self.log_widgets.clear()
 
-        # Create new threads
+        # Deduplicate ports - if both roles use same port, create one thread
+        unique_ports = {}
         for role, port in port_map.items():
-            thread = SerialThread(port, BAUDRATE, device_label=role)
-            log_w  = SensorLogWidget(role)
+            if port not in unique_ports:
+                unique_ports[port] = []
+            unique_ports[port].append(role)
+
+        # Create threads for each unique port
+        port_to_thread = {}
+        for port, roles in unique_ports.items():
+            # Use first role as primary label, or "COMBINED" if multiple
+            if len(roles) == 1:
+                label = roles[0]
+            else:
+                label = "COMBINED"
             
-            thread.received.connect(lambda obj, r=role: self._on_json(r, obj))
-            thread.raw_line.connect(lambda line, r=role: self.log_widgets[r].append(line))
+            thread = SerialThread(port, BAUDRATE, device_label=label)
+            log_w  = SensorLogWidget(label)
+            
+            thread.received.connect(lambda obj, l=label: self._on_json(l, obj))
+            thread.raw_line.connect(lambda line, l=label: self.log_widgets[l].append(line))
             thread.error.connect(self.on_serial_error)
-            thread.connection_lost.connect(lambda r=role: self._on_conn_lost(r))
+            thread.connection_lost.connect(lambda l=label: self._on_conn_lost(l))
             
             thread.start()
-            self.serial_threads[role] = thread
-            self.log_widgets[role]    = log_w
+            port_to_thread[port] = thread
+            self.log_widgets[label] = log_w
+
+        # Map each role to its thread
+        for role, port in port_map.items():
+            self.serial_threads[role] = port_to_thread[port]
 
         self._build_main_ui()
         self.stack.setCurrentIndex(1)
 
     def _build_main_ui(self):
-        # If rebuilding, remove the old main UI widget first
         if self.stack.count() > 1:
             old_widget = self.stack.widget(1)
             self.stack.removeWidget(old_widget)
@@ -701,7 +735,6 @@ class MCCB_UI(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ---- GLOBAL NAVIGATION HEADER ----
         header = QFrame()
         header.setStyleSheet("background-color: #FFFFFF; border-bottom: 4px solid #000000; border-top: none; border-left: none; border-right: none;")
         header_layout = QHBoxLayout(header)
@@ -731,7 +764,6 @@ class MCCB_UI(QWidget):
         
         layout.addWidget(header)
 
-        # ---- TABS ----
         tabs = QTabWidget()
         tabs.setDocumentMode(True)
 
@@ -768,27 +800,23 @@ class MCCB_UI(QWidget):
         ctrl.setLayout(ctrl_layout)
         tabs.addTab(ctrl, "CONTROL")
 
-        for role, log_w in self.log_widgets.items():
-            tabs.addTab(log_w, f"SENSORS // {role.upper()}")
+        for label, log_w in self.log_widgets.items():
+            tabs.addTab(log_w, f"SENSORS // {label.upper()}")
 
-        layout.addWidget(tabs, 1) # 1 gives the tabs all remaining vertical space
+        layout.addWidget(tabs, 1)
         main.setLayout(layout)
         self.stack.addWidget(main)
 
     def _reconfigure_ports(self):
-        """Stops threads and returns to the connection screen."""
         for t in self.serial_threads.values():
             try: t.stop()
             except: pass
         
         self.serial_threads.clear()
         self.log_widgets.clear()
-        
-        # Switch back to Page 0
         self.stack.setCurrentIndex(0)
 
     def _exit_app(self):
-        """Safely stops all threads and closes the application."""
         for t in self.serial_threads.values():
             try: t.stop()
             except: pass
@@ -798,19 +826,20 @@ class MCCB_UI(QWidget):
         dlg = ModeDialog(mode, self.serial_threads, self.log_widgets, self)
         dlg.exec_()
 
-    def _on_json(self, role, obj):
+    def _on_json(self, label, obj):
         if 'well' in obj:
             try:
-                self.log_widgets[role].latest[int(obj['well'])] = obj
+                self.log_widgets[label].latest[int(obj['well'])] = obj
             except (ValueError, TypeError):
                 pass
 
-    def _on_conn_lost(self, role):
-        QMessageBox.critical(self, "CONNECTION LOST",
-                             f"Serial connection to '{role.upper()}' was lost.")
+    def _on_conn_lost(self, label):
+        show_message(self, "CONNECTION LOST",
+                     f"Serial connection to '{label.upper()}' was lost.",
+                     QMessageBox.Critical)
 
     def on_serial_error(self, msg):
-        QMessageBox.warning(self, "SERIAL ERROR", msg)
+        show_message(self, "SERIAL ERROR", msg, QMessageBox.Warning)
 
     def closeEvent(self, e):
         for t in self.serial_threads.values():
@@ -821,7 +850,7 @@ class MCCB_UI(QWidget):
         e.accept()
 
 # =============================================
-# Mode dialog (2x2 Grid Layout - NO SCROLLING)
+# Mode dialog - Fixed for RPi 5 positioning & popups
 # =============================================
 class ModeDialog(QDialog):
     def __init__(self, mode, serial_threads, log_widgets, parent=None):
@@ -830,7 +859,9 @@ class ModeDialog(QDialog):
         self.serial_threads = serial_threads
         self.log_widgets    = log_widgets
         self.is_applying    = False
+        self._positioned    = False
 
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
         self.setWindowTitle(self._mode_label().upper())
         self.resize(1150, 740) 
 
@@ -922,6 +953,25 @@ class ModeDialog(QDialog):
 
         self.setLayout(main_layout)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._positioned:
+            self._center_on_screen()
+            self._positioned = True
+
+    def _center_on_screen(self):
+        screen = QApplication.primaryScreen()
+        if screen:
+            screen_geo = screen.availableGeometry()
+            w = min(self.width(), screen_geo.width() - 80)
+            h = min(self.height(), screen_geo.height() - 80)
+            if w != self.width() or h != self.height():
+                self.resize(w, h)
+            
+            x = screen_geo.x() + (screen_geo.width() - w) // 2
+            y = screen_geo.y() + (screen_geo.height() - h) // 2
+            self.move(x, y)
+
     def _on_input_activated(self, input_widget):
         self.numpad.set_active_input(input_widget)
 
@@ -943,6 +993,7 @@ class ModeDialog(QDialog):
 
         errors   = []
         commands = []
+        summary  = []
 
         for i, ent in enumerate(self.inputs, start=1):
             if ent["electric"] is not None:
@@ -954,6 +1005,7 @@ class ModeDialog(QDialog):
                             errors.append(f"WELL {i} E-FIELD OUT OF RANGE (0 - {MAX_EFIELD}).")
                         else:
                             commands.append(("electrode", {"cmd": "set", "well": i, "voltage": v}))
+                            summary.append(f"Well {i} Electric: {v} V/cm")
                     except ValueError:
                         errors.append(f"WELL {i} E-FIELD: INVALID NUMBER.")
 
@@ -966,11 +1018,12 @@ class ModeDialog(QDialog):
                             errors.append(f"WELL {i} MAGNETIC OUT OF RANGE (0 - {MAX_MAG}).")
                         else:
                             commands.append(("magnet", {"cmd": "set", "well": i, "gauss": v}))
+                            summary.append(f"Well {i} Magnetic: {v} Gauss")
                     except ValueError:
                         errors.append(f"WELL {i} MAGNETIC: INVALID NUMBER.")
 
         if errors:
-            QMessageBox.warning(self, "VALIDATION ERROR", "\n".join(errors))
+            show_message(self, "VALIDATION ERROR", "\n".join(errors), QMessageBox.Warning)
             self._reset_apply_button()
             return
 
@@ -978,17 +1031,22 @@ class ModeDialog(QDialog):
             if role in self.serial_threads:
                 self.serial_threads[role].send(cmd)
             else:
-                QMessageBox.warning(self, "DEVICE NOT CONNECTED",
-                                    f"NO '{role.upper()}' DEVICE IS CONNECTED.")
+                show_message(self, "DEVICE NOT CONNECTED",
+                             f"NO '{role.upper()}' DEVICE IS CONNECTED.",
+                             QMessageBox.Warning)
                 self._reset_apply_button()
                 return
 
-        QMessageBox.information(self, "COMMANDS SENT",
-                                f"{len(commands)} COMMAND(S) TRANSMITTED.\n"
-                                "CHECK THE SENSOR TAB FOR LIVE READINGS.")
+        msg_text = f"✓ {len(commands)} COMMAND(S) TRANSMITTED.\n\n"
+        if summary:
+            msg_text += "VALUES SENT:\n" + "\n".join(summary) + "\n\n"
+        msg_text += "Check the sensor tab for live readings."
+
+        show_message(self, "SETTINGS APPLIED", msg_text, 
+                     QMessageBox.Information, auto_close_ms=2000)
         
         self._reset_apply_button()
-        self.accept() 
+        self.accept()
 
     def _reset_apply_button(self):
         self.is_applying = False
