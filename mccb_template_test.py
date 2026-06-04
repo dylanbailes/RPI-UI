@@ -13,6 +13,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont
 
+from camera_viewer import CameraViewerWidget
+
 # =============================================
 # SWISS INTERNATIONAL STYLE QSS
 # =============================================
@@ -196,20 +198,14 @@ BAUDRATE   = 115200
 # =============================================
 def show_message(parent, title, text, icon=QMessageBox.Warning, 
                  buttons=QMessageBox.Ok, auto_close_ms=0):
-    """
-    Show a message box with proper window flags for RPi/Wayland compatibility.
-    If auto_close_ms > 0, the dialog auto-closes after that duration.
-    """
     msg = QMessageBox(parent)
     msg.setWindowFlags(Qt.Dialog | Qt.WindowStaysOnTopHint)
     msg.setIcon(icon)
     msg.setWindowTitle(title)
     msg.setText(text)
     msg.setStandardButtons(buttons)
-    
     if auto_close_ms > 0:
         QTimer.singleShot(auto_close_ms, msg.accept)
-    
     return msg.exec_()
 
 # =============================================
@@ -365,9 +361,7 @@ class TouchNumpadWidget(QWidget):
     def set_active_input(self, input_widget):
         if self.active_input:
             self.active_input.set_active(False)
-        
         self.active_input = input_widget
-        
         if self.active_input:
             self.active_input.set_active(True)
             self.display.setText(self.active_input.text())
@@ -390,7 +384,6 @@ class TouchNumpadWidget(QWidget):
             return
         else:
             current += label
-            
         self.display.setText(current)
         self.active_input.setText(current)
         
@@ -410,7 +403,7 @@ class TouchNumpadWidget(QWidget):
             self.display.setStyleSheet("border: 2px solid #000000; background-color: #F2F2F2;")
 
 # =============================================
-# NumpadLineEdit with Signal-based Activation
+# NumpadLineEdit
 # =============================================
 class NumpadLineEdit(QLineEdit):
     activated = pyqtSignal(object)
@@ -453,7 +446,7 @@ class NumpadLineEdit(QLineEdit):
         super().mousePressEvent(event)
 
 # =============================================
-# Continuous sensor log widget
+# Sensor log widget
 # =============================================
 class SensorLogWidget(QWidget):
     def __init__(self, device_label, parent=None):
@@ -475,13 +468,12 @@ class SensorLogWidget(QWidget):
         lbl.setFont(QFont("Inter", 12, QFont.Bold))
         lbl.setStyleSheet("letter-spacing: 2px;")
         hdr.addWidget(lbl)
-        
         hdr.addStretch()
         
         self.pause_btn = QPushButton("Pause")
         self.pause_btn.setProperty("variant", "secondary")
         self.pause_btn.setCheckable(True)
-        self.pause_btn.setMinimumWidth(120) 
+        self.pause_btn.setMinimumWidth(120)
         self.pause_btn.setFixedHeight(44)
         self.pause_btn.clicked.connect(self._toggle_pause)
         
@@ -505,7 +497,6 @@ class SensorLogWidget(QWidget):
         if self._paused:
             return
         self.log.append(f"> {line}")
-        
         doc = self.log.document()
         if doc.blockCount() > 500:
             cursor = self.log.textCursor()
@@ -513,7 +504,6 @@ class SensorLogWidget(QWidget):
             cursor.select(cursor.LineUnderCursor)
             cursor.removeSelectedText()
             cursor.deleteChar()
-
         if obj and 'well' in obj:
             try:
                 self.latest[int(obj['well'])] = obj
@@ -584,7 +574,6 @@ class DeviceConnectPanel(QWidget):
         form_layout.addLayout(form)
         layout.addWidget(form_container)
 
-        # Add note about single/dual device support
         note = QLabel(
             "Select the same port for both if using a single ESP32 for electric and magnetic control.\n"
             "ESP32s typically appear as CP210x or CH340."
@@ -612,7 +601,6 @@ class DeviceConnectPanel(QWidget):
         """)
         exit_btn.clicked.connect(self.exit_requested.emit)
         bottom_row.addWidget(exit_btn)
-        
         bottom_row.addStretch()
         
         connect_btn = QPushButton("Connect & Continue")
@@ -641,20 +629,16 @@ class DeviceConnectPanel(QWidget):
     def _on_connect(self):
         e_port = self.combo_electrode.currentText()
         m_port = self.combo_magnet.currentText()
-        
-        # Allow same port for both - single device operation
         result = {}
         if e_port != "(NONE)":
             result["electrode"] = e_port
         if m_port != "(NONE)":
             result["magnet"] = m_port
-            
         if not result:
-            show_message(self, "NO DEVICE", 
+            show_message(self, "NO DEVICE",
                 "Please select at least one device.",
                 QMessageBox.Warning)
             return
-            
         self.connected.emit(result)
 
 # =============================================
@@ -668,6 +652,7 @@ class MCCB_UI(QWidget):
 
         self.serial_threads = {}
         self.log_widgets    = {}
+        self.camera_tab     = None
         self.stack = QStackedLayout()
 
         self.connect_panel = DeviceConnectPanel()
@@ -689,35 +674,25 @@ class MCCB_UI(QWidget):
         self.serial_threads.clear()
         self.log_widgets.clear()
 
-        # Deduplicate ports - if both roles use same port, create one thread
         unique_ports = {}
         for role, port in port_map.items():
             if port not in unique_ports:
                 unique_ports[port] = []
             unique_ports[port].append(role)
 
-        # Create threads for each unique port
         port_to_thread = {}
         for port, roles in unique_ports.items():
-            # Use first role as primary label, or "COMBINED" if multiple
-            if len(roles) == 1:
-                label = roles[0]
-            else:
-                label = "COMBINED"
-            
+            label = roles[0] if len(roles) == 1 else "COMBINED"
             thread = SerialThread(port, BAUDRATE, device_label=label)
             log_w  = SensorLogWidget(label)
-            
             thread.received.connect(lambda obj, l=label: self._on_json(l, obj))
             thread.raw_line.connect(lambda line, l=label: self.log_widgets[l].append(line))
             thread.error.connect(self.on_serial_error)
             thread.connection_lost.connect(lambda l=label: self._on_conn_lost(l))
-            
             thread.start()
             port_to_thread[port] = thread
             self.log_widgets[label] = log_w
 
-        # Map each role to its thread
         for role, port in port_map.items():
             self.serial_threads[role] = port_to_thread[port]
 
@@ -735,6 +710,7 @@ class MCCB_UI(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # --- header ---
         header = QFrame()
         header.setStyleSheet("background-color: #FFFFFF; border-bottom: 4px solid #000000; border-top: none; border-left: none; border-right: none;")
         header_layout = QHBoxLayout(header)
@@ -744,7 +720,6 @@ class MCCB_UI(QWidget):
         title_lbl.setFont(QFont("Inter", 20, QFont.Bold))
         title_lbl.setStyleSheet("color: #000000; letter-spacing: 2px; text-transform: uppercase; border: none;")
         header_layout.addWidget(title_lbl)
-        
         header_layout.addStretch()
         
         reconfig_btn = QPushButton("RECONFIGURE PORTS")
@@ -761,12 +736,13 @@ class MCCB_UI(QWidget):
         """)
         exit_btn.clicked.connect(self._exit_app)
         header_layout.addWidget(exit_btn)
-        
         layout.addWidget(header)
 
+        # --- tabs ---
         tabs = QTabWidget()
         tabs.setDocumentMode(True)
 
+        # CONTROL tab
         ctrl = QWidget()
         ctrl_layout = QVBoxLayout()
         ctrl_layout.setContentsMargins(40, 40, 40, 40)
@@ -784,9 +760,9 @@ class MCCB_UI(QWidget):
         mb = QVBoxLayout()
         mb.setSpacing(16)
         for label, mode in [
-            ("ELECTRIC CURRENT",         "electric"),
-            ("MAGNETIC FIELD",           "magnetic"),
-            ("DUAL: ELECTRIC + MAGNETIC","dual"),
+            ("ELECTRIC CURRENT",          "electric"),
+            ("MAGNETIC FIELD",            "magnetic"),
+            ("DUAL: ELECTRIC + MAGNETIC", "dual"),
         ]:
             btn = QPushButton(label)
             btn.setMinimumHeight(56)
@@ -796,27 +772,40 @@ class MCCB_UI(QWidget):
         mode_box.setLayout(mb)
         ctrl_layout.addWidget(mode_box)
         ctrl_layout.addStretch()
-
         ctrl.setLayout(ctrl_layout)
         tabs.addTab(ctrl, "CONTROL")
 
+        # SENSORS tabs
         for label, log_w in self.log_widgets.items():
             tabs.addTab(log_w, f"SENSORS // {label.upper()}")
+
+        # IMAGING tab
+        self.camera_tab = CameraViewerWidget(num_wells=4)
+        tabs.addTab(self.camera_tab, "IMAGING")
 
         layout.addWidget(tabs, 1)
         main.setLayout(layout)
         self.stack.addWidget(main)
 
     def _reconfigure_ports(self):
+        if self.camera_tab:
+            try:
+                self.camera_tab.stop_all()
+            except Exception:
+                pass
         for t in self.serial_threads.values():
             try: t.stop()
             except: pass
-        
         self.serial_threads.clear()
         self.log_widgets.clear()
         self.stack.setCurrentIndex(0)
 
     def _exit_app(self):
+        if self.camera_tab:
+            try:
+                self.camera_tab.stop_all()
+            except Exception:
+                pass
         for t in self.serial_threads.values():
             try: t.stop()
             except: pass
@@ -842,6 +831,11 @@ class MCCB_UI(QWidget):
         show_message(self, "SERIAL ERROR", msg, QMessageBox.Warning)
 
     def closeEvent(self, e):
+        if self.camera_tab:
+            try:
+                self.camera_tab.stop_all()
+            except Exception:
+                pass
         for t in self.serial_threads.values():
             try:
                 t.stop()
@@ -850,7 +844,7 @@ class MCCB_UI(QWidget):
         e.accept()
 
 # =============================================
-# Mode dialog - Fixed for RPi 5 positioning & popups
+# Mode dialog
 # =============================================
 class ModeDialog(QDialog):
     def __init__(self, mode, serial_threads, log_widgets, parent=None):
@@ -863,7 +857,7 @@ class ModeDialog(QDialog):
 
         self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
         self.setWindowTitle(self._mode_label().upper())
-        self.resize(1150, 740) 
+        self.resize(1150, 740)
 
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(24, 24, 24, 24)
@@ -917,21 +911,18 @@ class ModeDialog(QDialog):
                 form.addRow("<span style='font-weight:700; font-size:13px;'>MAGNETIC (GAUSS):</span>", m_input)
 
             gb.setLayout(form)
-            
             row = (i - 1) // 2
             col = (i - 1) % 2
             wells_grid.addWidget(gb, row, col)
-            
             self.inputs.append({"electric": e_input, "magnetic": m_input})
 
         left_layout.addLayout(wells_grid)
 
         self.numpad = TouchNumpadWidget()
-        self.numpad.setFixedWidth(380) 
+        self.numpad.setFixedWidth(380)
         
-        split_layout.addWidget(left_widget, stretch=2)  
-        split_layout.addWidget(self.numpad, stretch=1)   
-        
+        split_layout.addWidget(left_widget, stretch=2)
+        split_layout.addWidget(self.numpad, stretch=1)
         main_layout.addLayout(split_layout)
 
         btn_row = QHBoxLayout()
@@ -967,7 +958,6 @@ class ModeDialog(QDialog):
             h = min(self.height(), screen_geo.height() - 80)
             if w != self.width() or h != self.height():
                 self.resize(w, h)
-            
             x = screen_geo.x() + (screen_geo.width() - w) // 2
             y = screen_geo.y() + (screen_geo.height() - h) // 2
             self.move(x, y)
@@ -984,7 +974,6 @@ class ModeDialog(QDialog):
 
     def _apply(self):
         self.numpad._confirm()
-        
         if self.is_applying:
             return
         self.is_applying = True
@@ -1042,9 +1031,8 @@ class ModeDialog(QDialog):
             msg_text += "VALUES SENT:\n" + "\n".join(summary) + "\n\n"
         msg_text += "Check the sensor tab for live readings."
 
-        show_message(self, "SETTINGS APPLIED", msg_text, 
+        show_message(self, "SETTINGS APPLIED", msg_text,
                      QMessageBox.Information, auto_close_ms=2000)
-        
         self._reset_apply_button()
         self.accept()
 
