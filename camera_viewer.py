@@ -375,6 +375,8 @@ class CameraTile(QWidget):
         self.video_label.setPixmap(QPixmap.fromImage(qimg))
 
     def _on_error(self, msg: str):
+        print(f"[CAMERA ERROR] Well {self._well_index + 1}: {msg}")  # ADD THIS 
+        self.video_label.setText(f"ERROR\n{msg}")
         self.video_label.setText(f"ERROR\n{msg}")
         self._set_status("ERROR", "stopped")
         self.btn_start.setEnabled(True)
