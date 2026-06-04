@@ -14,43 +14,56 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont
 
 # =============================================
-# SWISS INTERNATIONAL STYLE QSS (Design Tokens)
+# SWISS INTERNATIONAL STYLE QSS (Optimized for 2x2 Grid)
 # =============================================
 SWISS_QSS = """
 /* 1. Global Reset & Typography */
 QWidget {
     font-family: "Inter", "Helvetica", "Arial", sans-serif;
-    font-size: 14px;
+    font-size: 15px;
     color: #000000;
     background-color: #FFFFFF;
 }
 
 /* 2. The Grid as Law: Thick, visible borders, 0px radius */
-QGroupBox, QFrame, QScrollArea {
+QFrame {
     border: 2px solid #000000;
     border-radius: 0px;
     background-color: #FFFFFF;
 }
 
+/* COMPACT GroupBox for 2x2 Grid fitting */
+QGroupBox {
+    border: 2px solid #000000;
+    border-radius: 0px;
+    background-color: #FFFFFF;
+    margin-top: 14px; 
+    padding: 20px 12px 12px 12px; 
+}
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    padding: 4px 12px;
+    left: 12px;
+    padding: 4px 16px; 
     background-color: #000000;
     color: #FFFFFF;
     font-weight: 700;
     font-size: 12px;
     text-transform: uppercase;
-    letter-spacing: 2px;
+    letter-spacing: 1px;
 }
 
-/* 3. Pattern-Based Texture: Subtle 24px Grid on Muted Backgrounds */
+QScrollArea {
+    border: none;
+    background-color: transparent;
+}
+QScrollArea > QWidget > QWidget {
+    background-color: transparent;
+}
+
+/* 3. Muted Backgrounds */
 QWidget[variant="muted"] {
     background-color: #F2F2F2;
-    background-image: 
-        linear-gradient(#E0E0E0 1px, transparent 1px),
-        linear-gradient(90deg, #E0E0E0 1px, transparent 1px);
-    background-size: 24px 24px;
 }
 
 /* 4. Typography Roles */
@@ -58,7 +71,7 @@ QLabel {
     background-color: transparent;
 }
 QLabel[role="heading"] {
-    font-size: 28px;
+    font-size: 26px;
     font-weight: 900;
     text-transform: uppercase;
     letter-spacing: 1px;
@@ -66,12 +79,12 @@ QLabel[role="heading"] {
 QLabel[role="section-number"] {
     color: #FF3000;
     font-weight: 900;
-    font-size: 14px;
+    font-size: 13px;
     letter-spacing: 3px;
     text-transform: uppercase;
 }
 
-/* 5. Buttons: Brutalist, Rectangular, Instant Feedback */
+/* 5. Buttons: Large Touch Targets */
 QPushButton {
     background-color: #000000;
     color: #FFFFFF;
@@ -79,9 +92,10 @@ QPushButton {
     border-radius: 0px;
     padding: 12px 24px;
     font-weight: 700;
-    font-size: 14px;
+    font-size: 15px;
     text-transform: uppercase;
     letter-spacing: 1px;
+    min-height: 56px; 
 }
 QPushButton:hover {
     background-color: #FF3000;
@@ -105,23 +119,20 @@ QPushButton[variant="secondary"]:hover {
     color: #FFFFFF;
 }
 
-/* 6. Inputs: Sharp, High-Contrast */
+/* 6. Inputs: Sharp, High-Contrast, Touch-Friendly */
 QLineEdit, QComboBox {
     background-color: #FFFFFF;
     border: 2px solid #000000;
     border-radius: 0px;
-    padding: 10px 12px;
+    padding: 10px 14px;
     font-weight: 500;
-    font-size: 16px;
+    font-size: 15px;
+    min-height: 44px; /* Reduced to 44px to fit 4 wells on screen */
     selection-background-color: #FF3000;
     selection-color: #FFFFFF;
 }
 QLineEdit:focus, QComboBox:focus {
     border-color: #FF3000;
-}
-QLineEdit[readonly="true"] {
-    background-color: #F2F2F2;
-    color: #000000;
 }
 
 /* 7. Tabs */
@@ -136,11 +147,13 @@ QTabBar::tab {
     border: 2px solid #000000;
     border-bottom: none;
     border-radius: 0px;
-    padding: 12px 24px;
+    padding: 14px 36px; 
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 1px;
-    margin-right: 2px;
+    margin-right: 4px;
+    min-height: 52px;
+    min-width: 200px; 
 }
 QTabBar::tab:selected {
     background-color: #000000;
@@ -150,16 +163,16 @@ QTabBar::tab:hover:!selected {
     background-color: #FFFFFF;
 }
 
-/* 8. Scrollbars: Minimalist & Geometric */
+/* 8. Scrollbars */
 QScrollBar:vertical {
     border: none;
     background: #F2F2F2;
-    width: 12px;
+    width: 18px;
     margin: 0px;
 }
 QScrollBar::handle:vertical {
     background: #000000;
-    min-height: 20px;
+    min-height: 50px;
     border-radius: 0px;
 }
 QScrollBar::handle:vertical:hover {
@@ -174,10 +187,10 @@ QTextEdit {
     border: 2px solid #000000;
     border-radius: 0px;
     background-color: #000000;
-    color: #00FF00; /* Classic terminal green for raw data contrast, or use #FFFFFF */
+    color: #00FF00;
     font-family: "Monospace", "Courier New", monospace;
-    font-size: 12px;
-    padding: 8px;
+    font-size: 13px;
+    padding: 12px;
 }
 """
 
@@ -204,7 +217,6 @@ def detect_serial_devices():
         label = f"{tag} — {p.device} ({p.description})"
         found[label] = p.device
     return found
-
 
 # =============================================
 # Serial thread
@@ -275,32 +287,34 @@ class SerialThread(QThread):
         self._running = False
         self.wait()
 
-
 # =============================================
-# Numpad dialog (Swiss Styled)
+# Touch-Friendly Docked Numpad Widget
 # =============================================
-class NumpadDialog(QDialog):
-    def __init__(self, parent=None, current=""):
+class TouchNumpadWidget(QWidget):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("ENTER VALUE")
-        self.setModal(True)
-        self.setMinimumWidth(280)
-        self._value = current
-
+        self.active_input = None
+        
         layout = QVBoxLayout()
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-
-        self.display = QLineEdit(current)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+        
+        self.status_label = QLabel("TAP A FIELD TO EDIT")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setFont(QFont("Inter", 14, QFont.Bold))
+        self.status_label.setStyleSheet("color: #666666; letter-spacing: 1px;")
+        layout.addWidget(self.status_label)
+        
+        self.display = QLineEdit()
         self.display.setReadOnly(True)
         self.display.setAlignment(Qt.AlignRight)
-        self.display.setFont(QFont("Monospace", 24, QFont.Bold))
-        self.display.setFixedHeight(60)
+        self.display.setFont(QFont("Monospace", 32, QFont.Bold))
+        self.display.setFixedHeight(80)
+        self.display.setStyleSheet("border: 2px solid #000000; background-color: #F2F2F2;")
         layout.addWidget(self.display)
-
+        
         grid = QGridLayout()
-        grid.setSpacing(8)
-
+        grid.setSpacing(12)
         buttons = [
             ('7', 0, 0), ('8', 0, 1), ('9', 0, 2),
             ('4', 1, 0), ('5', 1, 1), ('6', 1, 2),
@@ -309,79 +323,123 @@ class NumpadDialog(QDialog):
         ]
         for (label, row, col) in buttons:
             btn = QPushButton(label)
-            btn.setFixedSize(72, 60)
-            btn.setFont(QFont("Inter", 18, QFont.Bold))
+            btn.setMinimumSize(80, 70)
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            btn.setFont(QFont("Inter", 22, QFont.Bold))
             if label == '⌫':
                 btn.setProperty("variant", "secondary")
             btn.clicked.connect(lambda _, l=label: self._on_key(l))
             grid.addWidget(btn, row, col)
-
         layout.addLayout(grid)
-
+        
         row_btns = QHBoxLayout()
-        row_btns.setSpacing(8)
-        cancel = QPushButton("Cancel")
-        cancel.setProperty("variant", "secondary")
-        ok     = QPushButton("Confirm")
-        ok.setDefault(True)
+        row_btns.setSpacing(12)
         
-        cancel.clicked.connect(self.reject)
-        ok.clicked.connect(self.accept)
+        clear_btn = QPushButton("CLEAR")
+        clear_btn.setProperty("variant", "secondary")
+        clear_btn.setMinimumHeight(56)
+        clear_btn.clicked.connect(self._clear)
         
-        row_btns.addWidget(cancel)
-        row_btns.addWidget(ok)
+        confirm_btn = QPushButton("CONFIRM")
+        confirm_btn.setMinimumHeight(56)
+        confirm_btn.setFont(QFont("Inter", 15, QFont.Bold))
+        confirm_btn.clicked.connect(self._confirm)
+        
+        row_btns.addWidget(clear_btn)
+        row_btns.addWidget(confirm_btn)
         layout.addLayout(row_btns)
-
+        
         self.setLayout(layout)
 
+    def set_active_input(self, input_widget):
+        if self.active_input:
+            self.active_input.set_active(False)
+        
+        self.active_input = input_widget
+        
+        if self.active_input:
+            self.active_input.set_active(True)
+            self.display.setText(self.active_input.text())
+            self.status_label.setText(f"EDITING: {self.active_input.field_name.upper()}")
+            self.status_label.setStyleSheet("color: #FF3000; font-weight: 900;")
+            self.display.setStyleSheet("border: 3px solid #FF3000; background-color: #FFFFFF;")
+        else:
+            self.display.setText("")
+            self.status_label.setText("TAP A FIELD TO EDIT")
+            self.status_label.setStyleSheet("color: #666666; font-weight: 700;")
+            self.display.setStyleSheet("border: 2px solid #000000; background-color: #F2F2F2;")
+            
     def _on_key(self, label):
+        if not self.active_input:
+            return
+        current = self.display.text()
         if label == '⌫':
-            self._value = self._value[:-1]
-        elif label == '.' and '.' in self._value:
+            current = current[:-1]
+        elif label == '.' and '.' in current:
             return
         else:
-            self._value += label
-        self.display.setText(self._value)
-
-    @staticmethod
-    def get_value(parent, current=""):
-        dlg = NumpadDialog(parent, current)
-        if dlg.exec_() == QDialog.Accepted:
-            return dlg._value
-        return None
-
+            current += label
+            
+        self.display.setText(current)
+        self.active_input.setText(current)
+        
+    def _clear(self):
+        if not self.active_input:
+            return
+        self.display.setText("")
+        self.active_input.setText("")
+        
+    def _confirm(self):
+        if self.active_input:
+            self.active_input.set_active(False)
+            self.active_input = None
+            self.display.setText("")
+            self.status_label.setText("TAP A FIELD TO EDIT")
+            self.status_label.setStyleSheet("color: #666666; font-weight: 700;")
+            self.display.setStyleSheet("border: 2px solid #000000; background-color: #F2F2F2;")
 
 # =============================================
-# NumpadLineEdit with real-time validation
+# NumpadLineEdit with Signal-based Activation
 # =============================================
 class NumpadLineEdit(QLineEdit):
-    def __init__(self, min_val=0.0, max_val=100.0, *args, **kwargs):
+    activated = pyqtSignal(object)
+
+    def __init__(self, field_name, min_val=0.0, max_val=100.0, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.field_name = field_name
         self.min_val = min_val
         self.max_val = max_val
         self.setReadOnly(True)
         self.setCursor(Qt.PointingHandCursor)
+        self._is_active = False
         self.textChanged.connect(self._validate_style)
 
+    def set_active(self, active):
+        self._is_active = active
+        if active:
+            self.setStyleSheet("border: 3px solid #FF3000; color: #000000; font-weight: 900; background-color: #FFF8F8;")
+        else:
+            self._validate_style(self.text())
+
     def _validate_style(self, text):
+        if self._is_active:
+            return
         text = text.strip()
         if not text or text == '.':
-            self.setStyleSheet("color: #FF3000; font-weight: bold;")  # Swiss Red for incomplete
+            self.setStyleSheet("border: 2px solid #000000; color: #FF3000; font-weight: bold;")
             return
         try:
             val = float(text)
             if self.min_val <= val <= self.max_val:
-                self.setStyleSheet("color: #000000; font-weight: 900;")  # Pure Black for valid
+                self.setStyleSheet("border: 2px solid #000000; color: #000000; font-weight: 900;")
             else:
-                self.setStyleSheet("color: #FF3000; font-weight: 900;")  # Swiss Red for out of range
+                self.setStyleSheet("border: 2px solid #000000; color: #FF3000; font-weight: 900;")
         except ValueError:
-            self.setStyleSheet("color: #FF3000;")  # Swiss Red for invalid
+            self.setStyleSheet("border: 2px solid #000000; color: #FF3000;")
 
     def mousePressEvent(self, event):
-        val = NumpadDialog.get_value(self.window(), self.text())
-        if val is not None:
-            self.setText(val)
-
+        self.activated.emit(self)
+        super().mousePressEvent(event)
 
 # =============================================
 # Continuous sensor log widget
@@ -397,11 +455,10 @@ class SensorLogWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Header with muted grid background
         hdr_frame = QFrame()
         hdr_frame.setProperty("variant", "muted")
         hdr = QHBoxLayout(hdr_frame)
-        hdr.setContentsMargins(12, 8, 12, 8)
+        hdr.setContentsMargins(16, 12, 16, 12)
         
         lbl = QLabel(f"LIVE FEED // {device_label.upper()}")
         lbl.setFont(QFont("Inter", 12, QFont.Bold))
@@ -413,12 +470,14 @@ class SensorLogWidget(QWidget):
         self.pause_btn = QPushButton("Pause")
         self.pause_btn.setProperty("variant", "secondary")
         self.pause_btn.setCheckable(True)
-        self.pause_btn.setFixedSize(80, 32)
+        self.pause_btn.setMinimumWidth(120) 
+        self.pause_btn.setFixedHeight(44)
         self.pause_btn.clicked.connect(self._toggle_pause)
         
         clear_btn = QPushButton("Clear")
         clear_btn.setProperty("variant", "secondary")
-        clear_btn.setFixedSize(80, 32)
+        clear_btn.setMinimumWidth(120)
+        clear_btn.setFixedHeight(44)
         clear_btn.clicked.connect(self._clear)
         
         hdr.addWidget(self.pause_btn)
@@ -458,7 +517,6 @@ class SensorLogWidget(QWidget):
         self.log.clear()
         self.latest = {}
 
-
 # =============================================
 # Device connection panel
 # =============================================
@@ -467,26 +525,31 @@ class DeviceConnectPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout()
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        content_widget = QWidget()
+        layout = QVBoxLayout(content_widget)
         layout.setContentsMargins(40, 40, 40, 40)
         layout.setSpacing(24)
 
-        # Section Number
         sec_num = QLabel("01. CONNECTION")
         sec_num.setProperty("role", "section-number")
         layout.addWidget(sec_num)
 
-        # Heading
         title = QLabel("ASSIGN SERIAL DEVICES")
         title.setProperty("role", "heading")
         layout.addWidget(title)
 
-        # Muted background container for form
         form_container = QFrame()
         form_container.setProperty("variant", "muted")
         form_layout = QVBoxLayout(form_container)
         form_layout.setContentsMargins(24, 24, 24, 24)
-        form_layout.setSpacing(16)
+        form_layout.setSpacing(20)
 
         self.devices = detect_serial_devices()
         port_options = ["(NONE)"] + list(self.devices.values())
@@ -494,10 +557,9 @@ class DeviceConnectPanel(QWidget):
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignLeft)
         form.setFormAlignment(Qt.AlignLeft)
-        form.setSpacing(16)
+        form.setSpacing(20)
 
-        # Custom styling for form labels
-        form_label_style = "font-weight: 700; text-transform: uppercase; letter-spacing: 1px; font-size: 12px;"
+        form_label_style = "font-weight: 700; text-transform: uppercase; letter-spacing: 1px; font-size: 14px;"
 
         self.combo_electrode = QComboBox()
         self.combo_electrode.addItems(port_options)
@@ -512,7 +574,7 @@ class DeviceConnectPanel(QWidget):
 
         self.refresh_btn = QPushButton("↺ Refresh Ports")
         self.refresh_btn.setProperty("variant", "secondary")
-        self.refresh_btn.setFixedWidth(200)
+        self.refresh_btn.setMaximumWidth(240)
         self.refresh_btn.clicked.connect(self._refresh)
         layout.addWidget(self.refresh_btn)
 
@@ -521,18 +583,20 @@ class DeviceConnectPanel(QWidget):
             "ESP32s typically appear as CP210x or CH340."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color: #666666; font-size: 12px;")
+        note.setStyleSheet("color: #666666; font-size: 13px;")
         layout.addWidget(note)
 
         layout.addStretch()
 
         connect_btn = QPushButton("Connect & Continue")
-        connect_btn.setFixedHeight(56)
-        connect_btn.setFont(QFont("Inter", 14, QFont.Bold))
+        connect_btn.setMinimumHeight(56)
+        connect_btn.setFont(QFont("Inter", 16, QFont.Bold))
         connect_btn.clicked.connect(self._on_connect)
         layout.addWidget(connect_btn)
 
-        self.setLayout(layout)
+        scroll.setWidget(content_widget)
+        main_layout.addWidget(scroll)
+        self.setLayout(main_layout)
 
     def _refresh(self):
         self.devices = detect_serial_devices()
@@ -566,7 +630,6 @@ class DeviceConnectPanel(QWidget):
             
         self.connected.emit(result)
 
-
 # =============================================
 # Main application window
 # =============================================
@@ -574,7 +637,7 @@ class MCCB_UI(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MCCB CONTROLLER")
-        self.setGeometry(100, 100, 800, 600)
+        self.resize(1280, 800)
 
         self.serial_threads = {}
         self.log_widgets    = {}
@@ -617,10 +680,9 @@ class MCCB_UI(QWidget):
         tabs = QTabWidget()
         tabs.setDocumentMode(True)
 
-        # ---- Control tab ----
         ctrl = QWidget()
         ctrl_layout = QVBoxLayout()
-        ctrl_layout.setContentsMargins(32, 32, 32, 32)
+        ctrl_layout.setContentsMargins(40, 40, 40, 40)
         ctrl_layout.setSpacing(24)
 
         sec_num = QLabel("02. STIMULATION")
@@ -633,15 +695,15 @@ class MCCB_UI(QWidget):
 
         mode_box = QGroupBox("SELECT MODE")
         mb = QVBoxLayout()
-        mb.setSpacing(12)
+        mb.setSpacing(16)
         for label, mode in [
             ("ELECTRIC CURRENT",         "electric"),
             ("MAGNETIC FIELD",           "magnetic"),
             ("DUAL: ELECTRIC + MAGNETIC","dual"),
         ]:
             btn = QPushButton(label)
-            btn.setFixedHeight(56)
-            btn.setFont(QFont("Inter", 14, QFont.Bold))
+            btn.setMinimumHeight(56)
+            btn.setFont(QFont("Inter", 16, QFont.Bold))
             btn.clicked.connect(lambda _, m=mode: self._open_mode(m))
             mb.addWidget(btn)
         mode_box.setLayout(mb)
@@ -651,7 +713,6 @@ class MCCB_UI(QWidget):
         ctrl.setLayout(ctrl_layout)
         tabs.addTab(ctrl, "CONTROL")
 
-        # ---- Live sensor tabs ----
         for role, log_w in self.log_widgets.items():
             tabs.addTab(log_w, f"SENSORS // {role.upper()}")
 
@@ -685,9 +746,8 @@ class MCCB_UI(QWidget):
                 pass
         e.accept()
 
-
 # =============================================
-# Mode dialog
+# Mode dialog (2x2 Grid Layout - NO SCROLLING)
 # =============================================
 class ModeDialog(QDialog):
     def __init__(self, mode, serial_threads, log_widgets, parent=None):
@@ -698,93 +758,103 @@ class ModeDialog(QDialog):
         self.is_applying    = False
 
         self.setWindowTitle(self._mode_label().upper())
-        self.setMinimumSize(550, 600)
+        self.resize(1150, 740) 
 
-        layout = QVBoxLayout()
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(20)
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(24, 24, 24, 24)
+        main_layout.setSpacing(20)
 
         sec_num = QLabel("03. PARAMETERS")
         sec_num.setProperty("role", "section-number")
-        layout.addWidget(sec_num)
+        main_layout.addWidget(sec_num)
 
         title = QLabel(self._mode_label())
         title.setProperty("role", "heading")
-        layout.addWidget(title)
+        main_layout.addWidget(title)
 
-        # ---- Well input boxes ----
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        inner = QWidget()
-        wells_layout = QVBoxLayout()
-        wells_layout.setSpacing(16)
+        # ---- Split Layout: Left (Wells 2x2) | Right (Numpad) ----
+        split_layout = QHBoxLayout()
+        split_layout.setSpacing(24)
+        split_layout.setAlignment(Qt.AlignTop) # Anchor to top for Swiss aesthetic
+
+        # LEFT: 2x2 Grid of Wells (No Scroll Area Needed)
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(16)
+        
+        wells_grid = QGridLayout()
+        wells_grid.setSpacing(16)
         self.inputs = []
 
         for i in range(1, 5):
             gb = QGroupBox(f"WELL {i}")
             form = QFormLayout()
+            form.setContentsMargins(0, 4, 0, 4) # Compact margins
             form.setLabelAlignment(Qt.AlignLeft)
             form.setFormAlignment(Qt.AlignLeft)
-            form.setSpacing(12)
+            form.setSpacing(8) # Compact spacing
+            form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow) # Inputs fill width
 
             e_input = None
             m_input = None
 
             if mode in ("electric", "dual"):
-                e_input = NumpadLineEdit(min_val=0.0, max_val=MAX_EFIELD)
+                e_input = NumpadLineEdit(f"Well {i} Electric", min_val=0.0, max_val=MAX_EFIELD)
                 e_input.setPlaceholderText(f"0 – {MAX_EFIELD} V/CM")
-                form.addRow("<span style='font-weight:600;'>ELECTRIC (V/CM):</span>", e_input)
+                e_input.setFixedHeight(44) # Touch-friendly but compact
+                e_input.activated.connect(self._on_input_activated)
+                form.addRow("<span style='font-weight:700; font-size:13px;'>ELECTRIC (V/CM):</span>", e_input)
 
             if mode in ("magnetic", "dual"):
-                m_input = NumpadLineEdit(min_val=0.0, max_val=MAX_MAG)
+                m_input = NumpadLineEdit(f"Well {i} Magnetic", min_val=0.0, max_val=MAX_MAG)
                 m_input.setPlaceholderText(f"0 – {MAX_MAG} GAUSS")
-                form.addRow("<span style='font-weight:600;'>MAGNETIC (GAUSS):</span>", m_input)
+                m_input.setFixedHeight(44) # Touch-friendly but compact
+                m_input.activated.connect(self._on_input_activated)
+                form.addRow("<span style='font-weight:700; font-size:13px;'>MAGNETIC (GAUSS):</span>", m_input)
 
             gb.setLayout(form)
-            wells_layout.addWidget(gb)
+            
+            # Calculate grid position (0,0), (0,1), (1,0), (1,1)
+            row = (i - 1) // 2
+            col = (i - 1) % 2
+            wells_grid.addWidget(gb, row, col)
+            
             self.inputs.append({"electric": e_input, "magnetic": m_input})
 
-        inner.setLayout(wells_layout)
-        scroll.setWidget(inner)
-        layout.addWidget(scroll)
+        left_layout.addLayout(wells_grid)
 
-        # ---- Live readings display ----
-        self.live_label = QLabel("LIVE READINGS: WAITING FOR DATA…")
-        self.live_label.setWordWrap(True)
-        self.live_label.setStyleSheet("""
-            font-family: "Monospace", "Courier New", monospace;
-            font-size: 12px; 
-            color: #000000;
-            background-color: #F2F2F2;
-            border: 2px solid #000000;
-            padding: 12px;
-        """)
-        layout.addWidget(self.live_label)
+        # RIGHT: Docked Numpad
+        self.numpad = TouchNumpadWidget()
+        self.numpad.setFixedWidth(380) 
+        
+        split_layout.addWidget(left_widget, stretch=2)  
+        split_layout.addWidget(self.numpad, stretch=1)   
+        
+        main_layout.addLayout(split_layout)
 
-        # Timer to refresh live readings
-        self.live_timer = QTimer(self)
-        self.live_timer.timeout.connect(self._refresh_live)
-        self.live_timer.start(1000)
-
-        # ---- Buttons ----
+        # ---- Bottom Action Bar ----
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(12)
+        btn_row.setSpacing(16)
         
         back = QPushButton("BACK")
         back.setProperty("variant", "secondary")
-        back.setFixedHeight(48)
+        back.setMinimumHeight(56)
         back.clicked.connect(self.reject)
         
         self.apply_btn = QPushButton("APPLY PARAMETERS")
-        self.apply_btn.setFixedHeight(48)
-        self.apply_btn.setFont(QFont("Inter", 14, QFont.Bold))
+        self.apply_btn.setMinimumHeight(56)
+        self.apply_btn.setFont(QFont("Inter", 16, QFont.Bold))
         self.apply_btn.clicked.connect(self._apply)
         
         btn_row.addWidget(back)
         btn_row.addWidget(self.apply_btn)
-        layout.addLayout(btn_row)
+        main_layout.addLayout(btn_row)
 
-        self.setLayout(layout)
+        self.setLayout(main_layout)
+
+    def _on_input_activated(self, input_widget):
+        self.numpad.set_active_input(input_widget)
 
     def _mode_label(self):
         return {
@@ -793,31 +863,9 @@ class ModeDialog(QDialog):
             "dual":     "Dual: Electric + Magnetic",
         }[self.mode]
 
-    def _refresh_live(self):
-        lines = []
-        for role, log_w in self.log_widgets.items():
-            if not log_w.latest:
-                lines.append(f"[{role.upper()}] NO DATA YET")
-                continue
-            
-            for well, data in sorted(log_w.latest.items()):
-                parts = [f"WELL {well}"]
-                for key in ("busVoltage_V", "current_mA", "drv_current_mA",
-                            "shunt_mV", "power_mW", "actualElectrodeVoltage_V"):
-                    if key in data:
-                        val = data[key]
-                        if isinstance(val, (int, float)):
-                            parts.append(f"{key.upper()}={val:.3f}")
-                        else:
-                            parts.append(f"{key.upper()}={val}")
-                lines.append(f"  > " + "  |  ".join(parts))
-        
-        if lines:
-            self.live_label.setText("\n".join(lines))
-        else:
-            self.live_label.setText("LIVE READINGS: WAITING FOR DATA…")
-
     def _apply(self):
+        self.numpad._confirm()
+        
         if self.is_applying:
             return
         self.is_applying = True
@@ -868,25 +916,26 @@ class ModeDialog(QDialog):
 
         QMessageBox.information(self, "COMMANDS SENT",
                                 f"{len(commands)} COMMAND(S) TRANSMITTED.\n"
-                                "LIVE READINGS PANEL WILL UPDATE AUTOMATICALLY.")
+                                "CHECK THE SENSOR TAB FOR LIVE READINGS.")
         
         self._reset_apply_button()
+        self.accept() 
 
     def _reset_apply_button(self):
         self.is_applying = False
         self.apply_btn.setEnabled(True)
         self.apply_btn.setText("APPLY PARAMETERS")
 
-
 # =============================================
 # Entry point
 # =============================================
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     
-    # Apply the Swiss International Style globally
+    app = QApplication(sys.argv)
     app.setStyleSheet(SWISS_QSS)
     
     window = MCCB_UI()
-    window.show()
+    window.showFullScreen()
     sys.exit(app.exec_())
