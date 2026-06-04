@@ -380,6 +380,7 @@ class CameraTile(QWidget):
             (self.video_label.width(), self.video_label.height()),
             interpolation=cv2.INTER_LINEAR
         )
+        print(f"[FRAME] display shape={display.shape} dtype={display.dtype} contiguous={display.flags['C_CONTIGUOUS']}")
         dh, dw = display.shape
         qimg = QImage(display.data, dw, dh, dw, QImage.Format_Grayscale8)
         self.video_label.setPixmap(QPixmap.fromImage(qimg))
