@@ -14,10 +14,9 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont
 
 # =============================================
-# SWISS INTERNATIONAL STYLE QSS (Optimized for 2x2 Grid)
+# SWISS INTERNATIONAL STYLE QSS
 # =============================================
 SWISS_QSS = """
-/* 1. Global Reset & Typography */
 QWidget {
     font-family: "Inter", "Helvetica", "Arial", sans-serif;
     font-size: 15px;
@@ -25,14 +24,12 @@ QWidget {
     background-color: #FFFFFF;
 }
 
-/* 2. The Grid as Law: Thick, visible borders, 0px radius */
 QFrame {
     border: 2px solid #000000;
     border-radius: 0px;
     background-color: #FFFFFF;
 }
 
-/* COMPACT GroupBox for 2x2 Grid fitting */
 QGroupBox {
     border: 2px solid #000000;
     border-radius: 0px;
@@ -61,12 +58,10 @@ QScrollArea > QWidget > QWidget {
     background-color: transparent;
 }
 
-/* 3. Muted Backgrounds */
 QWidget[variant="muted"] {
     background-color: #F2F2F2;
 }
 
-/* 4. Typography Roles */
 QLabel {
     background-color: transparent;
 }
@@ -84,7 +79,6 @@ QLabel[role="section-number"] {
     text-transform: uppercase;
 }
 
-/* 5. Buttons: Large Touch Targets */
 QPushButton {
     background-color: #000000;
     color: #FFFFFF;
@@ -95,7 +89,7 @@ QPushButton {
     font-size: 15px;
     text-transform: uppercase;
     letter-spacing: 1px;
-    min-height: 56px; 
+    min-height: 48px; 
 }
 QPushButton:hover {
     background-color: #FF3000;
@@ -119,7 +113,6 @@ QPushButton[variant="secondary"]:hover {
     color: #FFFFFF;
 }
 
-/* 6. Inputs: Sharp, High-Contrast, Touch-Friendly */
 QLineEdit, QComboBox {
     background-color: #FFFFFF;
     border: 2px solid #000000;
@@ -127,7 +120,7 @@ QLineEdit, QComboBox {
     padding: 10px 14px;
     font-weight: 500;
     font-size: 15px;
-    min-height: 44px; /* Reduced to 44px to fit 4 wells on screen */
+    min-height: 44px; 
     selection-background-color: #FF3000;
     selection-color: #FFFFFF;
 }
@@ -135,7 +128,6 @@ QLineEdit:focus, QComboBox:focus {
     border-color: #FF3000;
 }
 
-/* 7. Tabs */
 QTabWidget::pane {
     border: 2px solid #000000;
     border-radius: 0px;
@@ -163,7 +155,6 @@ QTabBar::tab:hover:!selected {
     background-color: #FFFFFF;
 }
 
-/* 8. Scrollbars */
 QScrollBar:vertical {
     border: none;
     background: #F2F2F2;
@@ -182,7 +173,6 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
 }
 
-/* 9. Text Edit (Log) */
 QTextEdit {
     border: 2px solid #000000;
     border-radius: 0px;
@@ -518,10 +508,11 @@ class SensorLogWidget(QWidget):
         self.latest = {}
 
 # =============================================
-# Device connection panel
+# Device connection panel (Page 0)
 # =============================================
 class DeviceConnectPanel(QWidget):
     connected = pyqtSignal(dict)
+    exit_requested = pyqtSignal() # New signal to exit from page 0
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -588,11 +579,28 @@ class DeviceConnectPanel(QWidget):
 
         layout.addStretch()
 
+        # Bottom row with Exit and Connect
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(16)
+        
+        exit_btn = QPushButton("EXIT APPLICATION")
+        exit_btn.setFixedHeight(56)
+        exit_btn.setStyleSheet("""
+            QPushButton { background-color: #FF3000; color: #FFFFFF; border: 2px solid #FF3000; }
+            QPushButton:hover { background-color: #000000; border-color: #000000; }
+        """)
+        exit_btn.clicked.connect(self.exit_requested.emit)
+        bottom_row.addWidget(exit_btn)
+        
+        bottom_row.addStretch()
+        
         connect_btn = QPushButton("Connect & Continue")
         connect_btn.setMinimumHeight(56)
         connect_btn.setFont(QFont("Inter", 16, QFont.Bold))
         connect_btn.clicked.connect(self._on_connect)
-        layout.addWidget(connect_btn)
+        bottom_row.addWidget(connect_btn)
+        
+        layout.addLayout(bottom_row)
 
         scroll.setWidget(content_widget)
         main_layout.addWidget(scroll)
@@ -643,8 +651,10 @@ class MCCB_UI(QWidget):
         self.log_widgets    = {}
         self.stack = QStackedLayout()
 
+        # Page 0: Connection
         self.connect_panel = DeviceConnectPanel()
         self.connect_panel.connected.connect(self._on_devices_connected)
+        self.connect_panel.exit_requested.connect(self._exit_app) # Wire up exit from page 0
         self.stack.addWidget(self.connect_panel)
 
         container = QWidget()
@@ -655,6 +665,14 @@ class MCCB_UI(QWidget):
         self.setLayout(root)
 
     def _on_devices_connected(self, port_map):
+        # Clean up any existing threads if reconfiguring
+        for t in self.serial_threads.values():
+            try: t.stop()
+            except: pass
+        self.serial_threads.clear()
+        self.log_widgets.clear()
+
+        # Create new threads
         for role, port in port_map.items():
             thread = SerialThread(port, BAUDRATE, device_label=role)
             log_w  = SensorLogWidget(role)
@@ -672,11 +690,48 @@ class MCCB_UI(QWidget):
         self.stack.setCurrentIndex(1)
 
     def _build_main_ui(self):
+        # If rebuilding, remove the old main UI widget first
+        if self.stack.count() > 1:
+            old_widget = self.stack.widget(1)
+            self.stack.removeWidget(old_widget)
+            old_widget.deleteLater()
+
         main = QWidget()
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # ---- GLOBAL NAVIGATION HEADER ----
+        header = QFrame()
+        header.setStyleSheet("background-color: #FFFFFF; border-bottom: 4px solid #000000; border-top: none; border-left: none; border-right: none;")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(32, 16, 32, 16)
+        
+        title_lbl = QLabel("MCCB CONTROLLER")
+        title_lbl.setFont(QFont("Inter", 20, QFont.Bold))
+        title_lbl.setStyleSheet("color: #000000; letter-spacing: 2px; text-transform: uppercase; border: none;")
+        header_layout.addWidget(title_lbl)
+        
+        header_layout.addStretch()
+        
+        reconfig_btn = QPushButton("RECONFIGURE PORTS")
+        reconfig_btn.setProperty("variant", "secondary")
+        reconfig_btn.setFixedHeight(48)
+        reconfig_btn.clicked.connect(self._reconfigure_ports)
+        header_layout.addWidget(reconfig_btn)
+        
+        exit_btn = QPushButton("EXIT APPLICATION")
+        exit_btn.setFixedHeight(48)
+        exit_btn.setStyleSheet("""
+            QPushButton { background-color: #FF3000; color: #FFFFFF; border: 2px solid #FF3000; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;}
+            QPushButton:hover { background-color: #000000; border-color: #000000; }
+        """)
+        exit_btn.clicked.connect(self._exit_app)
+        header_layout.addWidget(exit_btn)
+        
+        layout.addWidget(header)
+
+        # ---- TABS ----
         tabs = QTabWidget()
         tabs.setDocumentMode(True)
 
@@ -716,9 +771,28 @@ class MCCB_UI(QWidget):
         for role, log_w in self.log_widgets.items():
             tabs.addTab(log_w, f"SENSORS // {role.upper()}")
 
-        layout.addWidget(tabs)
+        layout.addWidget(tabs, 1) # 1 gives the tabs all remaining vertical space
         main.setLayout(layout)
         self.stack.addWidget(main)
+
+    def _reconfigure_ports(self):
+        """Stops threads and returns to the connection screen."""
+        for t in self.serial_threads.values():
+            try: t.stop()
+            except: pass
+        
+        self.serial_threads.clear()
+        self.log_widgets.clear()
+        
+        # Switch back to Page 0
+        self.stack.setCurrentIndex(0)
+
+    def _exit_app(self):
+        """Safely stops all threads and closes the application."""
+        for t in self.serial_threads.values():
+            try: t.stop()
+            except: pass
+        QApplication.instance().quit()
 
     def _open_mode(self, mode):
         dlg = ModeDialog(mode, self.serial_threads, self.log_widgets, self)
@@ -772,12 +846,10 @@ class ModeDialog(QDialog):
         title.setProperty("role", "heading")
         main_layout.addWidget(title)
 
-        # ---- Split Layout: Left (Wells 2x2) | Right (Numpad) ----
         split_layout = QHBoxLayout()
         split_layout.setSpacing(24)
-        split_layout.setAlignment(Qt.AlignTop) # Anchor to top for Swiss aesthetic
+        split_layout.setAlignment(Qt.AlignTop)
 
-        # LEFT: 2x2 Grid of Wells (No Scroll Area Needed)
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
@@ -790,11 +862,11 @@ class ModeDialog(QDialog):
         for i in range(1, 5):
             gb = QGroupBox(f"WELL {i}")
             form = QFormLayout()
-            form.setContentsMargins(0, 4, 0, 4) # Compact margins
+            form.setContentsMargins(0, 4, 0, 4)
             form.setLabelAlignment(Qt.AlignLeft)
             form.setFormAlignment(Qt.AlignLeft)
-            form.setSpacing(8) # Compact spacing
-            form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow) # Inputs fill width
+            form.setSpacing(8)
+            form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
 
             e_input = None
             m_input = None
@@ -802,20 +874,19 @@ class ModeDialog(QDialog):
             if mode in ("electric", "dual"):
                 e_input = NumpadLineEdit(f"Well {i} Electric", min_val=0.0, max_val=MAX_EFIELD)
                 e_input.setPlaceholderText(f"0 – {MAX_EFIELD} V/CM")
-                e_input.setFixedHeight(44) # Touch-friendly but compact
+                e_input.setFixedHeight(44)
                 e_input.activated.connect(self._on_input_activated)
                 form.addRow("<span style='font-weight:700; font-size:13px;'>ELECTRIC (V/CM):</span>", e_input)
 
             if mode in ("magnetic", "dual"):
                 m_input = NumpadLineEdit(f"Well {i} Magnetic", min_val=0.0, max_val=MAX_MAG)
                 m_input.setPlaceholderText(f"0 – {MAX_MAG} GAUSS")
-                m_input.setFixedHeight(44) # Touch-friendly but compact
+                m_input.setFixedHeight(44)
                 m_input.activated.connect(self._on_input_activated)
                 form.addRow("<span style='font-weight:700; font-size:13px;'>MAGNETIC (GAUSS):</span>", m_input)
 
             gb.setLayout(form)
             
-            # Calculate grid position (0,0), (0,1), (1,0), (1,1)
             row = (i - 1) // 2
             col = (i - 1) % 2
             wells_grid.addWidget(gb, row, col)
@@ -824,7 +895,6 @@ class ModeDialog(QDialog):
 
         left_layout.addLayout(wells_grid)
 
-        # RIGHT: Docked Numpad
         self.numpad = TouchNumpadWidget()
         self.numpad.setFixedWidth(380) 
         
@@ -833,7 +903,6 @@ class ModeDialog(QDialog):
         
         main_layout.addLayout(split_layout)
 
-        # ---- Bottom Action Bar ----
         btn_row = QHBoxLayout()
         btn_row.setSpacing(16)
         
