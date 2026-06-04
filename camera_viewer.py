@@ -558,6 +558,7 @@ class CameraViewerWidget(QWidget):
 
         # 2×2 grid
         camera_ids = self._enumerate_cameras()
+        print(f"[DEBUG] Cameras found at init: {camera_ids}")
         grid = QGridLayout()
         grid.setSpacing(2)
         grid.setContentsMargins(2, 2, 2, 2)
