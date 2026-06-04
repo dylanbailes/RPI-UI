@@ -373,6 +373,7 @@ class CameraTile(QWidget):
 
     # --- slots ---
     def _on_frame(self, arr: np.ndarray):
+        print(f"[FRAME] shape={arr.shape} label_size={self.video_label.width()}x{self.video_label.height()}")
         h, w = arr.shape
         display = cv2.resize(
             arr,
