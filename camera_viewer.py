@@ -333,8 +333,6 @@ class CameraTile(QWidget):
     def start_stream(self):
         if self._thread and self._thread.isRunning():
             return
-        self.video_label.setText("")      
-        self.video_label.clear()
         self._thread = CameraThread(self._camera_id)
         self._thread.frame_ready.connect(self._on_frame)
         self._thread.error_occurred.connect(self._on_error)
@@ -375,21 +373,18 @@ class CameraTile(QWidget):
 
     # --- slots ---
     def _on_frame(self, arr: np.ndarray):
+        arr = np.ascontiguousarray(arr)
         h, w = arr.shape
-        display = cv2.resize(
-            arr,
-            (self.video_label.width(), self.video_label.height()),
-            interpolation=cv2.INTER_LINEAR
+        qimg = QImage(arr.data, w, h, arr.strides[0], QImage.Format_Grayscale8)
+        pix = QPixmap.fromImage(qimg.copy())  # .copy() detaches from numpy buffer
+        self.video_label.setPixmap(
+            pix.scaled(
+                self.video_label.width(),
+                self.video_label.height(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
         )
-        display = np.ascontiguousarray(display)
-        dh, dw = display.shape
-        stride = display.strides[0]
-        qimg = QImage(display.data, dw, dh, stride, QImage.Format_Grayscale8)
-        print(f"[QIMG] isNull={qimg.isNull()} size={qimg.width()}x{qimg.height()}")
-        pix = QPixmap.fromImage(qimg)
-        print(f"[PIX] isNull={pix.isNull()} size={pix.width()}x{pix.height()}")
-        self.video_label.setPixmap(pix)
-        self.video_label.repaint()
 
     def _on_error(self, msg: str):
         print(f"[CAMERA ERROR] Well {self._well_index + 1}: {msg}")
