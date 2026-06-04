@@ -333,6 +333,8 @@ class CameraTile(QWidget):
     def start_stream(self):
         if self._thread and self._thread.isRunning():
             return
+        self.video_label.setText("")      
+        self.video_label.clear()
         self._thread = CameraThread(self._camera_id)
         self._thread.frame_ready.connect(self._on_frame)
         self._thread.error_occurred.connect(self._on_error)
