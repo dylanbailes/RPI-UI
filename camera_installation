@@ -1,0 +1,20 @@
+# 1. Increase USB buffer — required for USB3 camera streaming
+#    Must be re-run after every reboot, or add to /etc/rc.local
+sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'
+
+# 2. Install Spinnaker SDK dependencies
+sudo apt install -y libusb-1.0-0 libavcodec-dev libavformat-dev \
+    libswscale-dev libswresample-dev libavutil-dev
+
+# 3. Download Spinnaker SDK ARM64 from Teledyne's site (requires free account):
+#    https://www.flir.com/products/spinnaker-sdk/
+#    Transfer to Pi via scp, then install:
+tar -xf spinnaker-*-arm64-pkg.tar.gz
+cd spinnaker-*-arm64
+sudo sh install_spinnaker_arm.sh   # say YES to usbfs memory config
+
+# 4. Install PySpin wheel (download matching your Python version from same page)
+pip3 install spinnaker_python-*-cp311-cp311-linux_aarch64.whl
+
+# 5. Install numpy and OpenCV for frame conversion
+pip3 install numpy opencv-python-headless
