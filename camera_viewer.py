@@ -66,6 +66,19 @@ QPushButton#secondary:hover {
     border-color: #FF3000;
 }
 
+QPushButton#exit_btn {
+    background-color: #FF3000;
+    color: #FFFFFF;
+    border: 2px solid #FF3000;
+    min-height: 48px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+QPushButton#exit_btn:hover {
+    background-color: #000000;
+    border-color: #000000;
+}
+
 QComboBox {
     border: 2px solid #000000;
     border-radius: 0px;
@@ -193,7 +206,6 @@ class CameraThread(QThread):
 
             camera.set_exposure_time(float(exp))
             camera.set_gain(float(gain))
-            # frame rate — best-effort, camera may clamp
             try:
                 camera.set_frame_rate(float(fps))
             except Exception:
@@ -208,7 +220,6 @@ class CameraThread(QThread):
             self._running = True
 
             while self._running:
-                # apply any mid-stream setting changes
                 with QMutexLocker(self._mutex):
                     new_exp = self._exposure_us
                     new_gain = self._gain
@@ -362,9 +373,7 @@ class CameraTile(QWidget):
 
     # --- slots ---
     def _on_frame(self, arr: np.ndarray):
-        # arr is single-channel uint8; convert to QImage for display
         h, w = arr.shape
-        # scale to fit label while preserving aspect ratio
         display = cv2.resize(
             arr,
             (self.video_label.width(), self.video_label.height()),
@@ -375,8 +384,7 @@ class CameraTile(QWidget):
         self.video_label.setPixmap(QPixmap.fromImage(qimg))
 
     def _on_error(self, msg: str):
-        print(f"[CAMERA ERROR] Well {self._well_index + 1}: {msg}")  # ADD THIS 
-        self.video_label.setText(f"ERROR\n{msg}")
+        print(f"[CAMERA ERROR] Well {self._well_index + 1}: {msg}")
         self.video_label.setText(f"ERROR\n{msg}")
         self._set_status("ERROR", "stopped")
         self.btn_start.setEnabled(True)
@@ -386,7 +394,6 @@ class CameraTile(QWidget):
     def _set_status(self, text: str, status_prop: str):
         self.status_label.setText(text)
         self.status_label.setProperty("status", status_prop)
-        # force style refresh
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
 
@@ -432,7 +439,6 @@ class CameraSettingsPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # section header
         header = QLabel("  CAMERA SETTINGS")
         header.setObjectName("section_header")
         layout.addWidget(header)
@@ -530,7 +536,7 @@ class CameraViewerWidget(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # --- section header ---
+        # --- section header row with EXIT button ---
         hdr_row = QHBoxLayout()
         hdr_row.setContentsMargins(0, 0, 0, 0)
         hdr_row.setSpacing(0)
@@ -549,8 +555,15 @@ class CameraViewerWidget(QWidget):
         title_label.setObjectName("section_header")
         title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
+        self.btn_exit = QPushButton("✕  EXIT")
+        self.btn_exit.setObjectName("exit_btn")
+        self.btn_exit.setFixedWidth(120)
+        self.btn_exit.setFixedHeight(48)
+        self.btn_exit.clicked.connect(self._on_exit)
+
         hdr_row.addWidget(num_label)
         hdr_row.addWidget(title_label)
+        hdr_row.addWidget(self.btn_exit)
         root.addLayout(hdr_row)
 
         # --- body: grid + panel ---
@@ -585,6 +598,14 @@ class CameraViewerWidget(QWidget):
         body.addWidget(self.settings_panel)
 
         root.addLayout(body, stretch=1)
+
+    # --- exit ---
+    def _on_exit(self):
+        self.stop_all()
+        # If running standalone, quit the app; if embedded, just stop cameras
+        app = QApplication.instance()
+        if app:
+            app.quit()
 
     # --- camera enumeration ---
     @staticmethod
