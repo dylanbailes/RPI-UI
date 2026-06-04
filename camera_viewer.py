@@ -373,16 +373,16 @@ class CameraTile(QWidget):
 
     # --- slots ---
     def _on_frame(self, arr: np.ndarray):
-        print(f"[FRAME] shape={arr.shape} label_size={self.video_label.width()}x{self.video_label.height()}")
         h, w = arr.shape
         display = cv2.resize(
             arr,
             (self.video_label.width(), self.video_label.height()),
             interpolation=cv2.INTER_LINEAR
         )
-        print(f"[FRAME] display shape={display.shape} dtype={display.dtype} contiguous={display.flags['C_CONTIGUOUS']}")
+        display = np.ascontiguousarray(display)
         dh, dw = display.shape
-        qimg = QImage(display.data, dw, dh, dw, QImage.Format_Grayscale8)
+        stride = display.strides[0]
+        qimg = QImage(display.data, dw, dh, stride, QImage.Format_Grayscale8)
         self.video_label.setPixmap(QPixmap.fromImage(qimg))
 
     def _on_error(self, msg: str):
