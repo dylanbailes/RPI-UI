@@ -1,6 +1,9 @@
 /* ============================================================================
  * app.jsx — Shell: header, tab router, global E-STOP, toasts, Tweaks.
  * ========================================================================== */
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "accent": "#FF3000",
   "wellLayout": "stacked",
