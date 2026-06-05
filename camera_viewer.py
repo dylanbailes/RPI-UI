@@ -16,7 +16,7 @@ from gi.repository import Aravis
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout,
     QHBoxLayout, QGridLayout, QComboBox, QGroupBox, QSizePolicy,
-    QFileDialog
+    QFileDialog, QScrollArea
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QMutex, QMutexLocker
 from PyQt5.QtGui import QImage, QPixmap, QPainter
@@ -59,25 +59,6 @@ QPushButton#secondary:hover {
     background-color: #FF3000;
     color: #FFFFFF;
     border-color: #FF3000;
-}
-QPushButton#apply_btn {
-    background-color: #000000;
-    color: #FFFFFF;
-    border: 2px solid #000000;
-    font-weight: 900;
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    min-height: 36px;
-}
-QPushButton#apply_btn:hover {
-    background-color: #FF3000;
-    border-color: #FF3000;
-    color: #FFFFFF;
-}
-QPushButton#apply_btn:pressed {
-    background-color: #000000;
-    color: #FF3000;
 }
 QComboBox {
     border: 2px solid #000000;
@@ -133,10 +114,10 @@ class CroppingLabel(QLabel):
             painter = QPainter(self)
             painter.setRenderHint(QPainter.Antialiasing)
             painter.setRenderHint(QPainter.SmoothPixmapTransform)
-            
+
             # Qt.KeepAspectRatioByExpanding fills the rect and crops the excess
             scaled = self._pixmap.scaled(self.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            
+
             # Center the cropped image
             x = (self.width() - scaled.width()) // 2
             y = (self.height() - scaled.height()) // 2
@@ -149,17 +130,17 @@ class CroppingLabel(QLabel):
 # CameraThread
 # ---------------------------------------------------------------------------
 class CameraThread(QThread):
-    frame_ready = pyqtSignal(np.ndarray)
-    error_occurred = pyqtSignal(str)
+    frame_ready     = pyqtSignal(np.ndarray)
+    error_occurred  = pyqtSignal(str)
 
     def __init__(self, camera_id, parent=None):
         super().__init__(parent)
-        self._camera_id = camera_id
-        self._running = False
-        self._mutex = QMutex()
+        self._camera_id   = camera_id
+        self._running     = False
+        self._mutex       = QMutex()
         self._exposure_us = 5000
-        self._gain = 0.0
-        self._fps = 10
+        self._gain        = 0.0
+        self._fps         = 10
 
     def set_exposure(self, us):
         with QMutexLocker(self._mutex):
@@ -187,9 +168,9 @@ class CameraThread(QThread):
 
         try:
             with QMutexLocker(self._mutex):
-                exp = self._exposure_us
+                exp  = self._exposure_us
                 gain = self._gain
-                fps = self._fps
+                fps  = self._fps
 
             camera.set_exposure_time(float(exp))
             camera.set_gain(float(gain))
@@ -199,7 +180,7 @@ class CameraThread(QThread):
                 pass
 
             payload = camera.get_payload()
-            stream = camera.create_stream(None, None)
+            stream  = camera.create_stream(None, None)
             for _ in range(4):
                 stream.push_buffer(Aravis.Buffer.new_allocate(payload))
 
@@ -208,7 +189,7 @@ class CameraThread(QThread):
 
             while self._running:
                 with QMutexLocker(self._mutex):
-                    new_exp = self._exposure_us
+                    new_exp  = self._exposure_us
                     new_gain = self._gain
                 try:
                     camera.set_exposure_time(float(new_exp))
@@ -222,10 +203,10 @@ class CameraThread(QThread):
                     continue
 
                 if buf.get_status() == Aravis.BufferStatus.SUCCESS:
-                    w = buf.get_image_width()
-                    h = buf.get_image_height()
+                    w    = buf.get_image_width()
+                    h    = buf.get_image_height()
                     data = buf.get_data()
-                    arr = np.frombuffer(data, dtype=np.uint8).reshape((h, w)).copy()
+                    arr  = np.frombuffer(data, dtype=np.uint8).reshape((h, w)).copy()
                     self.frame_ready.emit(arr)
 
                 stream.push_buffer(buf)
@@ -243,64 +224,78 @@ class CameraThread(QThread):
 # CameraTile (Overlay Headers + Floating Icon Buttons)
 # ---------------------------------------------------------------------------
 class CameraTile(QWidget):
+    # Button geometry constants — change once here to affect everything
+    _BTN_W      = 44   # button width  (px)
+    _BTN_H      = 36   # button height (px) — tall enough for 18px emoji icons
+    _BTN_GAP    = 4    # spacing between buttons (px)
+    _RIGHT_PAD  = 8    # gap between buttons and right edge of tile (px)
+
     def __init__(self, well_index, camera_id, parent=None):
         super().__init__(parent)
-        self._well_index = well_index
-        self._camera_id = camera_id
-        self._thread = None
+        self._well_index   = well_index
+        self._camera_id    = camera_id
+        self._thread       = None
         self._snapshot_dir = os.path.expanduser("~/mccb_snapshots")
         os.makedirs(self._snapshot_dir, exist_ok=True)
         self._build_ui()
 
     def _build_ui(self):
-        # Layout takes 100% of space, no dedicated button column
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # ── video container ──────────────────────────────────────────────
         self.video_container = QWidget()
         self.video_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.video_container.setStyleSheet("background-color:#000000;")
-        
+
         video_layout = QVBoxLayout(self.video_container)
         video_layout.setContentsMargins(0, 0, 0, 0)
         video_layout.setSpacing(0)
 
-        # Custom cropping label fills the entire container
         self.video_label = CroppingLabel()
         video_layout.addWidget(self.video_label)
 
-        # Overlay Header (Top-Left)
+        # ── overlay: well number (top-left) ──────────────────────────────
         self.header_label = QLabel(f"WELL {self._well_index + 1:02d}", self.video_container)
         self.header_label.setStyleSheet(
-            "color:#FFFFFF; font-weight:900; font-size:14px; letter-spacing:2px; "
-            "background-color: rgba(0,0,0,180); padding: 4px 8px;"
+            "color:#FFFFFF; font-weight:900; font-size:13px; letter-spacing:2px; "
+            "background-color: rgba(0,0,0,180); padding: 3px 8px;"
         )
+        # adjustSize() tells Qt the natural width so text is never clipped
+        self.header_label.adjustSize()
         self.header_label.move(8, 8)
         self.header_label.raise_()
 
-        # Overlay Status (Below Header)
+        # ── overlay: status (below header) ───────────────────────────────
         self.status_label = QLabel("STOPPED", self.video_container)
         self.status_label.setStyleSheet(
-            "color:#FFFFFF; font-size:11px; letter-spacing:1px; "
+            "color:#FFFFFF; font-size:10px; letter-spacing:1px; "
             "background-color: rgba(0,0,0,160); padding: 2px 6px;"
         )
-        self.status_label.move(8, 36)
+        self.status_label.adjustSize()
+        self.status_label.move(8, 34)
         self.status_label.raise_()
 
-        # Overlay Buttons (Right side, vertically centered)
+        # ── overlay: right-side buttons ───────────────────────────────────
+        # Pre-compute the overlay's fixed pixel size so Qt never clips it.
+        #   width  = button_width + right_pad + small left margin (8px)
+        #   height = 3 buttons + 2 gaps
+        ow = self._BTN_W + self._RIGHT_PAD + 8
+        oh = 3 * self._BTN_H + 2 * self._BTN_GAP
+
         self.button_overlay = QWidget(self.video_container)
+        self.button_overlay.setFixedSize(ow, oh)
         self.button_overlay.setStyleSheet("background-color: transparent;")
+
         btn_layout = QVBoxLayout(self.button_overlay)
-        btn_layout.setContentsMargins(0, 0, 12, 0) # 12px from right edge
-        btn_layout.setSpacing(2)
-        btn_layout.addStretch() # Pushes buttons to vertical center
-        
-        # Unicode icons for Play, Pause, Camera
+        btn_layout.setContentsMargins(0, 0, self._RIGHT_PAD, 0)
+        btn_layout.setSpacing(self._BTN_GAP)
+
         self.btn_start = QPushButton("▶")
         self.btn_stop  = QPushButton("⏸")
         self.btn_snap  = QPushButton("📷")
-        
+
         self.btn_stop.setEnabled(False)
         self.btn_snap.setEnabled(False)
         if self._camera_id is None:
@@ -311,54 +306,68 @@ class CameraTile(QWidget):
         self.btn_snap.clicked.connect(self.take_snapshot)
 
         for btn in (self.btn_start, self.btn_stop, self.btn_snap):
-            btn.setFixedSize(60, 24)
+            btn.setFixedSize(self._BTN_W, self._BTN_H)
             btn.setStyleSheet("""
                 QPushButton {
-                    background-color: rgba(0, 0, 0, 220);
+                    background-color: rgba(0, 0, 0, 200);
                     color: #FFFFFF;
                     border: 2px solid #FFFFFF;
                     border-radius: 0px;
-                    font-size: 24px;
+                    font-size: 18px;
+                    padding: 0px;
                 }
                 QPushButton:hover {
                     background-color: #FF3000;
                     border-color: #FF3000;
                 }
                 QPushButton:disabled {
-                    background-color: rgba(100, 100, 100, 220);
-                    border-color: #666666;
-                    color: #CCCCCC;
+                    background-color: rgba(80, 80, 80, 200);
+                    border-color: #555555;
+                    color: #999999;
                 }
             """)
             btn_layout.addWidget(btn, alignment=Qt.AlignRight)
-            
-        btn_layout.addStretch()
+
         self.button_overlay.raise_()
 
         layout.addWidget(self.video_container, stretch=1)
 
+    # ------------------------------------------------------------------ events
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # Dynamically reposition overlays on resize to keep them perfectly placed
-        self.header_label.move(8, 8)
-        self.status_label.move(8, 36)
-        
-        if hasattr(self, 'button_overlay'):
-            # Dimensions: 48px width + 12px margin = 60px width
-            # Height: 48*3 + 12*2 = 168px height
-            overlay_w = 60
-            overlay_h = 168
-            
-            container_w = self.video_container.width()
-            container_h = self.video_container.height()
-            
-            # Center vertically, pin to right edge
-            x = container_w - overlay_w
-            y = max(40, (container_h - overlay_h) // 2) # Ensure it doesn't overlap the top header
-            
-            self.button_overlay.setGeometry(x, y, overlay_w, overlay_h)
-            self.button_overlay.raise_()
+        self._reposition_overlays()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._reposition_overlays()
+
+    def _reposition_overlays(self):
+        """Pin overlay widgets to correct positions after any resize."""
+        # Header and status labels: recalc their natural size then pin top-left
+        self.header_label.adjustSize()
+        self.header_label.move(8, 8)
+        self.status_label.adjustSize()
+        self.status_label.move(8, 34)
+
+        if not hasattr(self, 'button_overlay'):
+            return
+
+        cw = self.video_container.width()
+        ch = self.video_container.height()
+        if cw == 0 or ch == 0:
+            return
+
+        ow = self.button_overlay.width()
+        oh = self.button_overlay.height()
+
+        # Flush to right edge; vertically centred but never overlapping the header
+        x = cw - ow
+        y = max(50, (ch - oh) // 2)
+
+        self.button_overlay.setGeometry(x, y, ow, oh)
+        self.button_overlay.raise_()
+
+    # ------------------------------------------------------------------ stream
     def start_stream(self):
         if self._thread and self._thread.isRunning():
             return
@@ -370,18 +379,26 @@ class CameraTile(QWidget):
         self.btn_stop.setEnabled(True)
         self.btn_snap.setEnabled(True)
         self.status_label.setText("LIVE")
-        self.status_label.setStyleSheet("color:#FF3000; font-size:11px; letter-spacing:1px; font-weight:bold;")
+        self.status_label.adjustSize()
+        self.status_label.setStyleSheet(
+            "color:#FF3000; font-size:10px; letter-spacing:1px; font-weight:bold; "
+            "background-color: rgba(0,0,0,160); padding: 2px 6px;"
+        )
 
     def stop_stream(self):
         if self._thread:
             self._thread.stop()
             self._thread = None
-        self.video_label.setPixmap(QPixmap()) # Clear image
-        self.btn_start.setEnabled(True)
+        self.video_label.setPixmap(QPixmap())
+        self.btn_start.setEnabled(self._camera_id is not None)
         self.btn_stop.setEnabled(False)
         self.btn_snap.setEnabled(False)
         self.status_label.setText("STOPPED")
-        self.status_label.setStyleSheet("color:#FFFFFF; font-size:11px; letter-spacing:1px;")
+        self.status_label.adjustSize()
+        self.status_label.setStyleSheet(
+            "color:#FFFFFF; font-size:10px; letter-spacing:1px; "
+            "background-color: rgba(0,0,0,160); padding: 2px 6px;"
+        )
 
     def apply_settings(self, exposure_us, gain, fps):
         if self._thread:
@@ -392,8 +409,11 @@ class CameraTile(QWidget):
     def take_snapshot(self):
         pix = self.video_label.pixmap()
         if pix and not pix.isNull():
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            path = os.path.join(self._snapshot_dir, f"well{self._well_index+1:02d}_{ts}.png")
+            ts   = time.strftime("%Y%m%d_%H%M%S")
+            path = os.path.join(
+                self._snapshot_dir,
+                f"well{self._well_index + 1:02d}_{ts}.png"
+            )
             pix.save(path)
 
     def _on_frame(self, arr):
@@ -403,7 +423,11 @@ class CameraTile(QWidget):
 
     def _on_error(self, msg):
         self.status_label.setText("ERROR")
-        self.status_label.setStyleSheet("color:#FF3000; font-size:11px; letter-spacing:1px; font-weight:bold;")
+        self.status_label.adjustSize()
+        self.status_label.setStyleSheet(
+            "color:#FF3000; font-size:10px; letter-spacing:1px; font-weight:bold; "
+            "background-color: rgba(0,0,0,160); padding: 2px 6px;"
+        )
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.btn_snap.setEnabled(False)
@@ -432,7 +456,10 @@ class CameraSettingsPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedWidth(220)
+        # Use min+max instead of fixed so vertical sizing remains flexible
+        self.setMinimumWidth(220)
+        self.setMaximumWidth(220)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         self._build_ui()
 
     def _build_ui(self):
@@ -440,15 +467,34 @@ class CameraSettingsPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # ── panel header ─────────────────────────────────────────────────
         header = QLabel("CAMERA SETTINGS")
         header.setFixedHeight(32)
-        header.setStyleSheet("background-color:#000000; color:#FFFFFF; font-size:13px; font-weight:900; letter-spacing:2px; padding-left:8px; padding-top: 6px;")
+        header.setStyleSheet(
+            "background-color:#000000; color:#FFFFFF; font-size:12px; "
+            "font-weight:900; letter-spacing:2px; padding-left:8px; padding-top:6px;"
+        )
         layout.addWidget(header)
 
-        inner = QVBoxLayout()
+        # ── scroll area so content is never clipped on short windows ─────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setStyleSheet(
+            "QScrollArea { border: none; background-color: #F2F2F2; }"
+            "QScrollBar:vertical { width: 6px; background: #E8E8E8; }"
+            "QScrollBar::handle:vertical { background: #AAAAAA; min-height: 20px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+        )
+
+        inner_widget = QWidget()
+        inner_widget.setStyleSheet("background-color: #F2F2F2;")
+        inner = QVBoxLayout(inner_widget)
         inner.setContentsMargins(6, 6, 6, 6)
         inner.setSpacing(6)
 
+        # ── Exposure ──────────────────────────────────────────────────────
         exp_group = QGroupBox("EXPOSURE")
         exp_layout = QVBoxLayout(exp_group)
         exp_layout.setContentsMargins(6, 14, 6, 6)
@@ -459,6 +505,7 @@ class CameraSettingsPanel(QWidget):
         exp_layout.addWidget(self.combo_exposure)
         inner.addWidget(exp_group)
 
+        # ── Gain ──────────────────────────────────────────────────────────
         gain_group = QGroupBox("GAIN")
         gain_layout = QVBoxLayout(gain_group)
         gain_layout.setContentsMargins(6, 14, 6, 6)
@@ -468,6 +515,7 @@ class CameraSettingsPanel(QWidget):
         gain_layout.addWidget(self.combo_gain)
         inner.addWidget(gain_group)
 
+        # ── Frame Rate ────────────────────────────────────────────────────
         fps_group = QGroupBox("FRAME RATE")
         fps_layout = QVBoxLayout(fps_group)
         fps_layout.setContentsMargins(6, 14, 6, 6)
@@ -478,29 +526,73 @@ class CameraSettingsPanel(QWidget):
         fps_layout.addWidget(self.combo_fps)
         inner.addWidget(fps_group)
 
+        # ── Apply to All ──────────────────────────────────────────────────
+        # FIX: stylesheet applied directly on the button instance, NOT via
+        # an objectName selector on a parent — that selector never propagates
+        # down in Qt, which is why the button appeared invisible until clicked.
         btn_apply = QPushButton("APPLY TO ALL")
-        btn_apply.setObjectName("apply_btn")
         btn_apply.setFixedHeight(36)
+        btn_apply.setStyleSheet("""
+            QPushButton {
+                background-color: #000000;
+                color: #FFFFFF;
+                border: 2px solid #000000;
+                border-radius: 0px;
+                font-weight: 900;
+                font-size: 12px;
+                letter-spacing: 1px;
+            }
+            QPushButton:hover {
+                background-color: #FF3000;
+                border-color: #FF3000;
+                color: #FFFFFF;
+            }
+            QPushButton:pressed {
+                background-color: #CC2000;
+            }
+        """)
         btn_apply.clicked.connect(self._emit_settings)
         inner.addWidget(btn_apply)
 
+        # ── Snapshots ─────────────────────────────────────────────────────
         snap_group = QGroupBox("SNAPSHOTS")
         snap_layout = QVBoxLayout(snap_group)
         snap_layout.setContentsMargins(6, 14, 6, 6)
+        snap_layout.setSpacing(4)
         lbl = QLabel("~/mccb_snapshots/")
-        lbl.setStyleSheet("font-size: 10px; margin-bottom: 4px;")
+        lbl.setStyleSheet("font-size: 10px; color: #444444;")
+        lbl.setWordWrap(True)
         snap_layout.addWidget(lbl)
         btn_open = QPushButton("OPEN FOLDER")
-        btn_open.setObjectName("secondary")
         btn_open.setFixedHeight(36)
+        btn_open.setStyleSheet("""
+            QPushButton {
+                background-color: #FFFFFF;
+                color: #000000;
+                border: 2px solid #000000;
+                border-radius: 0px;
+                font-weight: 700;
+                font-size: 12px;
+                letter-spacing: 1px;
+            }
+            QPushButton:hover {
+                background-color: #FF3000;
+                color: #FFFFFF;
+                border-color: #FF3000;
+            }
+            QPushButton:pressed {
+                background-color: #CC2000;
+                color: #FFFFFF;
+            }
+        """)
         btn_open.clicked.connect(self._open_dir)
         snap_layout.addWidget(btn_open)
         inner.addWidget(snap_group)
 
-        container = QWidget()
-        container.setLayout(inner)
-        container.setStyleSheet("background-color: #F2F2F2;")
-        layout.addWidget(container, stretch=1)
+        inner.addStretch(1)
+
+        scroll.setWidget(inner_widget)
+        layout.addWidget(scroll, stretch=1)
 
     def _emit_settings(self):
         exp_us = self.EXPOSURE_OPTIONS[self.combo_exposure.currentIndex()][1]
@@ -527,8 +619,8 @@ class CameraViewerWidget(QWidget):
     def __init__(self, num_wells=4, parent=None):
         super().__init__(parent)
         self._num_wells = num_wells
-        self._tiles = []
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding) # Conforms strictly to tab space
+        self._tiles     = []
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._build_ui()
 
     def _build_ui(self):
@@ -548,21 +640,28 @@ class CameraViewerWidget(QWidget):
 
         for i in range(self._num_wells):
             cam_id = camera_ids[i] if i < len(camera_ids) else None
-            tile = CameraTile(well_index=i, camera_id=cam_id)
+            tile   = CameraTile(well_index=i, camera_id=cam_id)
             self._tiles.append(tile)
             row, col = divmod(i, 2)
             grid.addWidget(tile, row, col)
-            grid.setRowStretch(row, 1)
-            grid.setColumnStretch(col, 1)
+
+        # Set stretches for all rows and columns outside the loop so every
+        # row/column is guaranteed equal weight (loop approach misses rows
+        # that aren't the last one added for a given index).
+        for r in range(2):
+            grid.setRowStretch(r, 1)
+        for c in range(2):
+            grid.setColumnStretch(c, 1)
 
         grid_container = QWidget()
         grid_container.setLayout(grid)
         grid_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        grid_container.setMinimumSize(1, 1)
         body.addWidget(grid_container, stretch=1)
 
         self.settings_panel = CameraSettingsPanel()
         self.settings_panel.settings_changed.connect(self._apply_settings)
-        body.addWidget(self.settings_panel)
+        body.addWidget(self.settings_panel, stretch=0)
 
         root.addLayout(body, stretch=1)
 
