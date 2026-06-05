@@ -272,7 +272,7 @@ class CameraTile(QWidget):
 
         for btn in (self.btn_start, self.btn_stop, self.btn_snap):
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            btn.setFixedHeight(24)
+            btn.setFixedHeight(12)
             footer.addWidget(btn)
         layout.addLayout(footer)
 
