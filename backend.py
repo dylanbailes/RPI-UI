@@ -6,6 +6,7 @@ import serial.tools.list_ports
 import struct
 import threading
 import gi
+
 gi.require_version('Aravis', '0.8')
 from gi.repository import Aravis
 
@@ -15,16 +16,20 @@ from fastapi.responses import FileResponse
 
 app = FastAPI()
 
-# 1. Serve the compiled React app from the js/dist folder
-app.mount("/static", StaticFiles(directory="js/dist"), name="static")
+# =========================================================================
+# 1. SERVE REACT FRONTEND (The Fix for the Blank Screen)
+# =========================================================================
+# Mount the 'assets' folder so the browser can load the JS/CSS bundles
+app.mount("/assets", StaticFiles(directory="js/dist/assets"), name="assets")
 
+# Serve the main index.html for the root and any frontend routes
 @app.get("/")
 @app.get("/{full_path:path}")
 async def serve_react(full_path: str = ""):
     return FileResponse("js/dist/index.html")
 
 # =========================================================================
-# Global State Management
+# 2. GLOBAL STATE MANAGEMENT
 # =========================================================================
 active_ws = None
 loop = None
@@ -35,7 +40,6 @@ stop_events = {}         # key -> threading.Event
 camera_settings = {}     # well_num -> dict of settings
 
 def send_ws_sync(msg_type, data):
-    """Thread-safe helper to send JSON from background threads to the UI."""
     if active_ws and loop:
         try:
             asyncio.run_coroutine_threadsafe(
@@ -45,7 +49,6 @@ def send_ws_sync(msg_type, data):
             print(f"WS JSON send error: {e}")
 
 def send_ws_binary_sync(binary_data):
-    """Thread-safe helper to send raw binary camera frames to the UI."""
     if active_ws and loop:
         try:
             asyncio.run_coroutine_threadsafe(active_ws.send_bytes(binary_data), loop)
@@ -53,7 +56,7 @@ def send_ws_binary_sync(binary_data):
             print(f"WS Binary send error: {e}")
 
 # =========================================================================
-# Background Hardware Threads
+# 3. BACKGROUND HARDWARE THREADS
 # =========================================================================
 def serial_reader_loop(well_num, port, stop_event):
     ser = None
@@ -84,8 +87,6 @@ def camera_reader_loop(well_num, camera_id, stop_event):
     try:
         Aravis.update_device_list()
         camera = Aravis.Camera.new(camera_id)
-        
-        # Default settings
         camera.set_exposure_time(5000.0)
         camera.set_gain(0.0)
         try: camera.set_frame_rate(10.0)
@@ -97,7 +98,6 @@ def camera_reader_loop(well_num, camera_id, stop_event):
         camera.start_acquisition()
         
         while not stop_event.is_set():
-            # Apply settings if UI changed them
             settings = camera_settings.get(well_num)
             if settings:
                 try:
@@ -106,7 +106,7 @@ def camera_reader_loop(well_num, camera_id, stop_event):
                     try: camera.set_frame_rate(float(settings["fps"]))
                     except: pass
                 except Exception as e: print(f"Cam {well_num} settings error: {e}")
-                camera_settings[well_num] = None # Clear after applying
+                camera_settings[well_num] = None
 
             buf = stream.try_pop_buffer()
             if buf is None:
@@ -116,11 +116,8 @@ def camera_reader_loop(well_num, camera_id, stop_event):
                 w = buf.get_image_width()
                 h = buf.get_image_height()
                 data = buf.get_data()
-                
-                # Create binary packet: [1 byte well_num][2 bytes w][2 bytes h][raw pixels]
                 header = struct.pack('!BHH', well_num, w, h)
                 send_ws_binary_sync(header + bytes(data))
-                
             stream.push_buffer(buf)
     except Exception as e:
         send_ws_sync("error", {"well": well_num, "msg": f"Camera error: {e}"})
@@ -129,7 +126,7 @@ def camera_reader_loop(well_num, camera_id, stop_event):
         except: pass
 
 # =========================================================================
-# WebSocket Endpoint
+# 4. WEBSOCKET ENDPOINT
 # =========================================================================
 @app.websocket("/ws/hardware")
 async def websocket_endpoint(websocket: WebSocket):
@@ -141,7 +138,6 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             msg = await websocket.receive()
-            
             if "text" in msg:
                 data = json.loads(msg["text"])
                 cmd = data.get("cmd")
@@ -197,3 +193,7 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         for evt in stop_events.values(): evt.set()
         active_ws = None
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
