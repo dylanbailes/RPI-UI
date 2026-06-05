@@ -66,35 +66,44 @@ def send_ws_binary_sync(binary_data):
 def serial_reader_loop(well_num, port, stop_event):
     ser = None
     try:
-        ser = serial.Serial(port, 115200, timeout=0.1)
+        # FIX 1: Match the ESP32's 500000 baud rate (firmware is set to 500000)
+        ser = serial.Serial(port, 500000, timeout=0.1)
         serial_objects[well_num] = ser
         buf = ""
+        
         while not stop_event.is_set():
             data = ser.read(512).decode(errors='ignore')
             if data:
                 buf += data
-            while '\n' in buf:
-                line, buf = buf.split('\n', 1)
-                line = line.strip()
-                if line:
-                    try:
-                        # 1. Try parsing as standard JSON first
-                        obj = json.loads(line)
-                        send_ws_sync("telemetry", {"well": well_num, "data": obj})
-                        
-                    except json.JSONDecodeError:
-                        # 2. FALLBACK: Parse space or comma separated values from ESP32
-                        # e.g., "12.34 56.78" or "12.34, 56.78"
-                        parts = line.replace(',', ' ').split()
-                        if len(parts) >= 2:
+                while '\n' in buf:
+                    line, buf = buf.split('\n', 1)
+                    line = line.strip()
+                    if line:
+                        # NEW: Handle calibration protocol
+                        if line.startswith("CAL_LUT "):
+                            lut_str = line[8:]
                             try:
-                                obj = {
-                                    "gauss1": float(parts[0]),
-                                    "gauss2": float(parts[1])
-                                }
-                                send_ws_sync("telemetry", {"well": well_num, "data": obj})
+                                lut = [float(x) for x in lut_str.split(',')]
+                                send_ws_sync("calibration", {"well": well_num, "lut": lut})
                             except ValueError:
-                                pass # Ignore malformed lines
+                                pass
+                        elif line == "CAL_START":
+                            send_ws_sync("cal_status", {"well": well_num, "status": "running"})
+                        elif line == "CAL_END":
+                            send_ws_sync("cal_status", {"well": well_num, "status": "done"})
+                        else:
+                            # Existing telemetry parsing
+                            try:
+                                obj = json.loads(line)
+                                send_ws_sync("telemetry", {"well": well_num, "data": obj})
+                            except json.JSONDecodeError:
+                                parts = line.split()
+                                if len(parts) >= 2:
+                                    try:
+                                        obj = {"gauss1": float(parts[0]), "gauss2": float(parts[1])}
+                                        send_ws_sync("telemetry", {"well": well_num, "data": obj})
+                                    except ValueError:
+                                        pass
     except Exception as e:
         send_ws_sync("error", {"well": well_num, "msg": str(e)})
     finally:
@@ -230,11 +239,42 @@ async def websocket_endpoint(websocket: WebSocket):
                     well = data["well"]
                     if well in stop_events: stop_events[well].set()
                     
-                elif cmd in ("set", "stop"):
+                elif cmd == "set":
                     well = data.get("well")
                     if well in serial_objects and serial_objects[well].is_open:
-                        try: serial_objects[well].write((json.dumps(data) + '\n').encode())
-                        except Exception as e: send_ws_sync("error", {"well": well, "msg": str(e)})
+                        try:
+                            # Extract translated PWM and channel from frontend
+                            channel = data.get("channel") # 'h' (Helmholtz) or 'e' (Electrode)
+                            pwm = data.get("pwm", 0.0)    # 0.0 to 100.0
+                            mode = data.get("mode", 1)    # Default to STEP (1)
+                            freq = data.get("freq", 10.0) # Default to 10 Hz
+                            
+                            if channel in ('h', 'e'):
+                                # Format for ESP32: <target> <mode> <amp%> <freq>
+                                cmd_str = f"{channel} {mode} {pwm:.2f} {freq:.2f}\n"
+                                serial_objects[well].write(cmd_str.encode())
+                                
+                        except Exception as e:
+                            send_ws_sync("error", {"well": well, "msg": str(e)})
+                            
+                elif cmd == "stop":
+                    well = data.get("well")
+                    if well in serial_objects and serial_objects[well].is_open:
+                        try:
+                            # Send OFF command (mode 0, 0% PWM) for both channels
+                            serial_objects[well].write(b"e 0 0.00 10.00\n")
+                            serial_objects[well].write(b"h 0 0.00 10.00\n")
+                        except Exception as e:
+                            send_ws_sync("error", {"well": well, "msg": str(e)})
+
+                elif cmd == "zero":
+                    # Optional: Trigger the ESP32's auto-zero calibration
+                    well = data.get("well")
+                    if well in serial_objects and serial_objects[well].is_open:
+                        try:
+                            serial_objects[well].write(b"z\n")
+                        except Exception as e:
+                            send_ws_sync("error", {"well": well, "msg": str(e)})
                         
                 elif cmd == "start_camera":
                     well, cam_id = data["well"], data["id"]
@@ -253,6 +293,14 @@ async def websocket_endpoint(websocket: WebSocket):
                         "gain": data.get("gain", 0),
                         "fps": data.get("fps", 10)
                     }
+                
+                elif cmd == "calibrate":
+                    well = data.get("well")
+                    if well in serial_objects and serial_objects[well].is_open:
+                        try:
+                            serial_objects[well].write(b"c\n")
+                        except Exception as e:
+                            send_ws_sync("error", {"well": well, "msg": str(e)})
 
     except WebSocketDisconnect:
         print("UI disconnected")

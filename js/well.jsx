@@ -54,7 +54,7 @@ function LogPanel({ well, filter, height }) {
       </div>
       <div className="term grow" ref={scrollRef}>
         {shown.length === 0
-          ? <div className="ln" style={{ opacity: .5 }}> &gt; awaiting data…</div>
+          ? <div className="ln" style={{ opacity: .5 }}>&gt; awaiting data…</div>
           : shown.map((l, i) => (
               <div className={'ln' + (i === shown.length - 1 ? ' fresh' : '')} key={i}>
                 &gt; {l}
@@ -89,8 +89,9 @@ function ChartCard({ title, well, accessor, accent, variant, grid, height }) {
 function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }) {
   useEngineTick(10);
   const isE = metric === 'electric';
+  const needsCalibration = !well.calibrated && metric === 'magnetic';
   
-  // UPDATED: Pass both gauss1 and gauss2 arrays to the chart!
+  // Pass both gauss1 and gauss2 arrays to the chart for magnetic view
   const acc = isE
     ? { series: () => well.history.efield.values, setpoint: () => well.setEfield, latest: () => well.measEfield, max: window.MCCB.MAX_EFIELD }
     : { series: () => [well.history.gauss1.values, well.history.gauss2.values], setpoint: () => well.setGauss, latest: () => well.measGauss1, max: window.MCCB.MAX_MAG };
@@ -107,7 +108,6 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
       <Readout label="Current" value={well.current} decimals={2} unit="mA" />
     </React.Fragment>
   ) : (
-    // UPDATED: Show HE1, HE1 RMS, HE2, HE2 RMS
     <React.Fragment>
       <Readout label="HE1 Inst." value={well.measGauss1} unit="G" accent />
       <Readout label="HE1 RMS (2s)" value={well.rms1} unit="G" />
@@ -116,10 +116,9 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
     </React.Fragment>
   );
   
-  const roCols = 4; // 4 columns fits perfectly for both views now
+  const roCols = 4; 
   const chart = <ChartCard title={title + ' — Measured vs Setpoint'} well={well} accessor={acc} accent={accent} variant={variant} grid={grid} />;
 
-  // ... The rest of MetricView remains exactly the same ...
   return (
     <div className="col grow" style={{ padding: 18, gap: 14 }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
@@ -128,7 +127,30 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
           <StatusPill status={status} big />
         </div>
         <div className="row gap-8">
-          <button className="btn btn-secondary btn-sm" style={{ minWidth: 150 }} onClick={() => onConfigure(well.num, metric)}>Set Value</button>
+          {/* NEW: Calibration Button (Only shows for Magnetic view) */}
+          {metric === 'magnetic' && (
+            <button 
+              className="btn btn-secondary btn-sm" 
+              style={{ 
+                minWidth: 150, 
+                background: well.calibrating ? 'var(--dim)' : (needsCalibration ? 'var(--accent)' : ''), 
+                color: (well.calibrating || needsCalibration) ? '#fff' : '' 
+              }}
+              disabled={well.calibrating}
+              onClick={() => window.MCCB.sendToBackend({ cmd: 'calibrate', well: well.num })}>
+              {well.calibrating ? 'Calibrating...' : 'Calibrate Mag'}
+            </button>
+          )}
+          
+          {/* UPDATED: Set Value button is disabled if magnetic calibration is missing */}
+          <button 
+            className="btn btn-secondary btn-sm" 
+            style={{ minWidth: 150 }} 
+            disabled={needsCalibration}
+            onClick={() => onConfigure(well.num, metric)}>
+            {needsCalibration ? 'Calibrate First' : 'Set Value'}
+          </button>
+          
           <button className="btn btn-danger btn-sm" style={{ minWidth: 120 }} onClick={() => window.MCCB.engine.stopWell(well.num)}>Stop</button>
         </div>
       </div>
@@ -179,7 +201,9 @@ function CollapsibleStack({ chart, well, filter }) {
 function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
   useEngineTick(10);
   const eAcc = { series: () => well.history.efield.values, setpoint: () => well.setEfield, latest: () => well.measEfield, max: window.MCCB.MAX_EFIELD };
-  const mAcc = { series: () => well.history.gauss.values, setpoint: () => well.setGauss, latest: () => well.measGauss, max: window.MCCB.MAX_MAG };
+  
+  // UPDATED: Use gauss1 for the combined overview chart
+  const mAcc = { series: () => well.history.gauss1.values, setpoint: () => well.setGauss, latest: () => well.measGauss1, max: window.MCCB.MAX_MAG };
   const side = layout === 'split';
   
   const block = (title, acc, status, setVal, measVal, unit, mode, rmsVal) => (
@@ -194,8 +218,7 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
           <span className="mono" style={{ fontSize: 22, fontWeight: 700, color: accent }}>
             <AnimatedNumber value={measVal} decimals={2} /><span className="ro-unit">{unit}</span>
           </span>
-          {/* NEW: Compact RMS indicator in combined view */}
-          {rmsVal !== undefined && (
+          {rmsVal !== undefined && rmsVal !== null && (
             <span className="kicker" style={{ color: 'var(--dim)' }}>
               RMS: <span className="mono" style={{ color: 'var(--ink)', fontSize: 14 }}>{rmsVal.toFixed(2)}</span>
             </span>
@@ -218,7 +241,8 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
       </div>
       <div className={side ? 'row grow gap-14' : 'col grow gap-14'} style={{ minHeight: 0 }}>
         {block('Electric', eAcc, well.electricStatus, well.setEfield, well.measEfield, 'V/cm', 'electric')}
-        {block('Magnetic', mAcc, well.magneticStatus, well.setGauss, well.measGauss, 'G', 'magnetic', well.measRms)}
+        {/* UPDATED: Pass well.measGauss1 and well.rms1 to the magnetic block */}
+        {block('Magnetic', mAcc, well.magneticStatus, well.setGauss, well.measGauss1, 'G', 'magnetic', well.rms1)}
       </div>
     </div>
   );
