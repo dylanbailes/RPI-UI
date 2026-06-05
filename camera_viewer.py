@@ -15,7 +15,7 @@ from gi.repository import Aravis
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout,
     QHBoxLayout, QGridLayout, QComboBox, QGroupBox, QSizePolicy,
-    QFileDialog
+    QFileDialog, QScrollArea
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QMutex, QMutexLocker
 from PyQt5.QtGui import QImage, QPixmap
@@ -496,7 +496,14 @@ class CameraViewerWidget(QWidget):
         grid_container = QWidget()
         grid_container.setLayout(grid)
         grid_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        body.addWidget(grid_container, stretch=1)
+
+        scroll = QScrollArea()
+        scroll.setWidget(grid_container)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setStyleSheet("QScrollArea { border: none; background-color: #FFFFFF; }")
+        body.addWidget(scroll, stretch=1)
 
         self.settings_panel = CameraSettingsPanel()
         self.settings_panel.settings_changed.connect(self._apply_settings)
