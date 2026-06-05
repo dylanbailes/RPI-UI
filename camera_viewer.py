@@ -222,23 +222,29 @@ class CameraTile(QWidget):
         header.setStyleSheet("background-color:#000000; color:#FFFFFF; font-weight:bold; letter-spacing:1px; font-size:11px;")
         layout.addWidget(header)
 
-        # video label — fills all available space, no aspect ratio letterboxing
-        self.video_label = QLabel()
+        # video label with overlaid status
+        video_container = QWidget()
+        video_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        video_container.setMinimumSize(200, 150)
+        video_container.setStyleSheet("background-color:#000000;")
+
+        self.video_label = QLabel(video_container)
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setMinimumSize(200, 150)
         self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.video_label.setStyleSheet("background-color:#000000; border: 2px solid #000000;")
-        self.video_label.setScaledContents(True)  # fills label exactly, no black bars
-        layout.addWidget(self.video_label, stretch=1)
+        self.video_label.setScaledContents(True)
+        self.video_label.setGeometry(0, 0, 200, 150)
 
-        # status
-        status_row = QHBoxLayout()
-        status_row.setContentsMargins(4, 2, 4, 2)
-        self.status_label = QLabel("STOPPED")
-        self.status_label.setStyleSheet("color:#000000; font-size:11px; letter-spacing:1px;")
-        status_row.addWidget(self.status_label)
-        status_row.addStretch()
-        layout.addLayout(status_row)
+        self.status_label = QLabel("STOPPED", video_container)
+        self.status_label.setStyleSheet(
+            "color:#FFFFFF; font-size:10px; letter-spacing:1px; "
+            "background-color: rgba(0,0,0,160); padding: 1px 4px;"
+        )
+        self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.status_label.move(6, 6)
+        self.status_label.raise_()
+
+        layout.addWidget(video_container, stretch=1)
 
         # buttons
         footer = QHBoxLayout()
@@ -262,6 +268,7 @@ class CameraTile(QWidget):
 
         for btn in (self.btn_start, self.btn_stop, self.btn_snap):
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            btn.setFixedHeight(24)
             footer.addWidget(btn)
         layout.addLayout(footer)
 
@@ -319,6 +326,13 @@ class CameraTile(QWidget):
         if self._thread and self._thread.isRunning():
             self._thread.stop()
             self._thread = None
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'video_label'):
+            parent = self.video_label.parent()
+            if parent:
+                self.video_label.setGeometry(0, 0, parent.width(), parent.height())
 
 
 # ---------------------------------------------------------------------------
