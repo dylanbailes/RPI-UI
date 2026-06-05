@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel,
     QStackedLayout, QLineEdit, QGroupBox, QMessageBox, QSizePolicy,
     QFormLayout, QDialog, QGridLayout, QScrollArea, QTabWidget,
-    QTextEdit, QComboBox, QFrame
+    QTextEdit, QComboBox, QFrame, QStackedWidget
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont
@@ -125,6 +125,13 @@ QLineEdit, QComboBox {
     min-height: 44px; 
     selection-background-color: #FF3000;
     selection-color: #FFFFFF;
+}
+QComboBox QAbstractItemView {
+    background-color: #FFFFFF;
+    border: 2px solid #000000;
+    selection-background-color: #FF3000;
+    selection-color: #FFFFFF;
+    outline: 0;
 }
 QLineEdit:focus, QComboBox:focus {
     border-color: #FF3000;
@@ -446,13 +453,14 @@ class NumpadLineEdit(QLineEdit):
         super().mousePressEvent(event)
 
 # =============================================
-# Sensor log widget
+# Sensor log widget (for each sub-view)
 # =============================================
 class WellLogWidget(QWidget):
-    def __init__(self, well_number, parent=None):
+    def __init__(self, well_number, view_type="COMBINED", parent=None):
         super().__init__(parent)
         self.well_number = well_number
-        self.latest      = {"electric": {}, "magnetic": {}}
+        self.view_type   = view_type
+        self.latest      = None
         self._paused     = False
 
         layout = QVBoxLayout()
@@ -464,7 +472,14 @@ class WellLogWidget(QWidget):
         hdr = QHBoxLayout(hdr_frame)
         hdr.setContentsMargins(16, 12, 16, 12)
         
-        lbl = QLabel(f"WELL {well_number} // LIVE FEED")
+        view_labels = {
+            "COMBINED": "ALL DATA",
+            "ELECTRIC": "ELECTRIC FIELD",
+            "MAGNETIC": "MAGNETIC FIELD"
+        }
+        view_label = view_labels.get(view_type, "LIVE FEED")
+        
+        lbl = QLabel(f"WELL {well_number} // {view_label}")
         lbl.setFont(QFont("Inter", 12, QFont.Bold))
         lbl.setStyleSheet("letter-spacing: 2px;")
         hdr.addWidget(lbl)
@@ -504,11 +519,12 @@ class WellLogWidget(QWidget):
             cursor.select(cursor.LineUnderCursor)
             cursor.removeSelectedText()
             cursor.deleteChar()
-        if obj and 'well' in obj:
-            try:
-                self.latest[int(obj['well'])] = obj
-            except (ValueError, TypeError):
-                pass
+        if obj:
+            self.latest = obj
+
+    def update_latest(self, obj):
+        """Update latest value without appending to log display"""
+        self.latest = obj
 
     def _toggle_pause(self, checked):
         self._paused = checked
@@ -516,7 +532,140 @@ class WellLogWidget(QWidget):
 
     def _clear(self):
         self.log.clear()
-        self.latest = {"electric": {}, "magnetic": {}}
+        self.latest = None
+
+# =============================================
+# Well container with left-side sub-navigation
+# =============================================
+class WellContainerWidget(QWidget):
+    def __init__(self, well_number, parent=None):
+        super().__init__(parent)
+        self.well_number = well_number
+        
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # Left sidebar with navigation buttons
+        sidebar = QFrame()
+        sidebar.setFixedWidth(220)
+        sidebar.setStyleSheet("""
+            QFrame {
+                background-color: #F2F2F2;
+                border-right: 3px solid #000000;
+                border-top: none;
+                border-bottom: none;
+                border-left: none;
+            }
+        """)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(0)
+        
+        # Sidebar header
+        header = QLabel(f"WELL {well_number}")
+        header.setAlignment(Qt.AlignCenter)
+        header.setFixedHeight(64)
+        header.setStyleSheet("""
+            QLabel {
+                background-color: #000000;
+                color: #FFFFFF;
+                font-weight: 900;
+                font-size: 18px;
+                letter-spacing: 3px;
+                border: none;
+            }
+        """)
+        sidebar_layout.addWidget(header)
+        
+        # Navigation buttons
+        self.nav_buttons = []
+        nav_items = [
+            ("COMBINED", "ALL DATA"),
+            ("ELECTRIC", "ELECTRIC"),
+            ("MAGNETIC", "MAGNETIC")
+        ]
+        
+        for view_type, display_text in nav_items:
+            btn = QPushButton(display_text)
+            btn.setCheckable(True)
+            btn.setFixedHeight(60)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #F2F2F2;
+                    color: #000000;
+                    border: none;
+                    border-bottom: 2px solid #000000;
+                    font-weight: 700;
+                    font-size: 14px;
+                    text-transform: uppercase;
+                    letter-spacing: 2px;
+                    text-align: left;
+                    padding-left: 24px;
+                }
+                QPushButton:checked {
+                    background-color: #FFFFFF;
+                    border-left: 5px solid #FF3000;
+                    padding-left: 19px;
+                    color: #FF3000;
+                }
+                QPushButton:hover:!checked {
+                    background-color: #E0E0E0;
+                }
+            """)
+            btn.clicked.connect(lambda _, v=view_type: self._switch_view(v))
+            sidebar_layout.addWidget(btn)
+            self.nav_buttons.append((view_type, btn))
+        
+        sidebar_layout.addStretch()
+        layout.addWidget(sidebar)
+        
+        # Right content area with stacked widget
+        self.stack = QStackedWidget()
+        
+        self.combined_log = WellLogWidget(well_number, "COMBINED")
+        self.electric_log = WellLogWidget(well_number, "ELECTRIC")
+        self.magnetic_log = WellLogWidget(well_number, "MAGNETIC")
+        
+        self.stack.addWidget(self.combined_log)
+        self.stack.addWidget(self.electric_log)
+        self.stack.addWidget(self.magnetic_log)
+        
+        layout.addWidget(self.stack, 1)
+        
+        self.setLayout(layout)
+        
+        # Default to combined view
+        self._switch_view("COMBINED")
+    
+    def _switch_view(self, view_type):
+        view_map = {"COMBINED": 0, "ELECTRIC": 1, "MAGNETIC": 2}
+        if view_type in view_map:
+            self.stack.setCurrentIndex(view_map[view_type])
+        
+        # Update button checked states
+        for vtype, btn in self.nav_buttons:
+            btn.setChecked(vtype == view_type)
+    
+    def append_raw_line(self, line):
+        """Called when raw line received - always goes to combined log"""
+        self.combined_log.append(line)
+    
+    def append_json_obj(self, obj):
+        """Called when JSON parsed - routes to appropriate sub-logs"""
+        # Always update combined latest
+        self.combined_log.update_latest(obj)
+        
+        # Route to electric if voltage data present
+        if 'voltage' in obj:
+            line = json.dumps(obj)
+            self.electric_log.append(line, obj)
+        
+        # Route to magnetic if gauss data present
+        if 'gauss' in obj:
+            line = json.dumps(obj)
+            self.magnetic_log.append(line, obj)
 
 # =============================================
 # Device connection panel for 4 wells
@@ -626,18 +775,18 @@ class DeviceConnectPanel(QWidget):
                 combo.setCurrentIndex(idx)
 
     def _on_connect(self):
-        e_port = self.combo_electrode.currentText()
-        m_port = self.combo_magnet.currentText()
         result = {}
-        if e_port != "(NONE)":
-            result["electrode"] = e_port
-        if m_port != "(NONE)":
-            result["magnet"] = m_port
+        for i, combo in enumerate(self.well_combos, start=1):
+            port = combo.currentText()
+            if port != "(NONE)":
+                result[f"well_{i}"] = port
+                
         if not result:
             show_message(self, "NO DEVICE",
                 "Please select at least one device.",
                 QMessageBox.Warning)
             return
+            
         self.connected.emit(result)
 
 # =============================================
@@ -649,9 +798,9 @@ class MCCB_UI(QWidget):
         self.setWindowTitle("MCCB CONTROLLER")
         self.resize(1280, 800)
 
-        self.serial_threads = {}
-        self.log_widgets    = {}
-        self.camera_tab     = None
+        self.serial_threads   = {}
+        self.well_containers  = {}
+        self.camera_tab       = None
         self.stack = QStackedLayout()
 
         self.connect_panel = DeviceConnectPanel()
@@ -667,36 +816,49 @@ class MCCB_UI(QWidget):
         self.setLayout(root)
 
     def _on_devices_connected(self, port_map):
+        # Stop any existing threads
         for t in self.serial_threads.values():
             try: t.stop()
             except: pass
         self.serial_threads.clear()
-        self.log_widgets.clear()
+        self.well_containers.clear()
 
-        unique_ports = {}
-        for role, port in port_map.items():
-            if port not in unique_ports:
-                unique_ports[port] = []
-            unique_ports[port].append(role)
-
-        port_to_thread = {}
-        for port, roles in unique_ports.items():
-            label = roles[0] if len(roles) == 1 else "COMBINED"
-            thread = SerialThread(port, BAUDRATE, device_label=label)
-            log_w  = SensorLogWidget(label)
-            thread.received.connect(lambda obj, l=label: self._on_json(l, obj))
-            thread.raw_line.connect(lambda line, l=label: self.log_widgets[l].append(line))
+        # Create thread and container for each connected well
+        for well_key, port in port_map.items():
+            well_num = int(well_key.split('_')[1])
+            
+            # Create container FIRST (before starting thread)
+            container = WellContainerWidget(well_num)
+            self.well_containers[well_num] = container
+            self.serial_threads[well_key] = None  # Placeholder until thread created
+            
+            # Create thread
+            thread = SerialThread(port, BAUDRATE, device_label=f"Well {well_num}")
+            
+            # Connect signals - use default arg to capture well_num correctly
+            thread.raw_line.connect(lambda line, w=well_num: self._on_raw_line(w, line))
+            thread.received.connect(lambda obj, w=well_num: self._on_json_obj(w, obj))
             thread.error.connect(self.on_serial_error)
-            thread.connection_lost.connect(lambda l=label: self._on_conn_lost(l))
+            thread.connection_lost.connect(lambda w=well_num: self._on_conn_lost(w))
+            
+            # Store thread reference
+            self.serial_threads[well_key] = thread
+            
+            # Start thread AFTER container is in dict (fixes race condition)
             thread.start()
-            port_to_thread[port] = thread
-            self.log_widgets[label] = log_w
-
-        for role, port in port_map.items():
-            self.serial_threads[role] = port_to_thread[port]
 
         self._build_main_ui()
         self.stack.setCurrentIndex(1)
+
+    def _on_raw_line(self, well_num, line):
+        """Route raw line to well's combined log"""
+        if well_num in self.well_containers:
+            self.well_containers[well_num].append_raw_line(line)
+
+    def _on_json_obj(self, well_num, obj):
+        """Route parsed JSON to appropriate sub-logs"""
+        if well_num in self.well_containers:
+            self.well_containers[well_num].append_json_obj(obj)
 
     def _build_main_ui(self):
         if self.stack.count() > 1:
@@ -774,9 +936,10 @@ class MCCB_UI(QWidget):
         ctrl.setLayout(ctrl_layout)
         tabs.addTab(ctrl, "CONTROL")
 
-        # SENSORS tabs
-        for label, log_w in self.log_widgets.items():
-            tabs.addTab(log_w, f"SENSORS // {label.upper()}")
+        # WELL tabs - one per connected well
+        for well_num in sorted(self.well_containers.keys()):
+            container = self.well_containers[well_num]
+            tabs.addTab(container, f"WELL {well_num}")
 
         # IMAGING tab
         self.camera_tab = CameraViewerWidget(num_wells=4)
@@ -796,7 +959,7 @@ class MCCB_UI(QWidget):
             try: t.stop()
             except: pass
         self.serial_threads.clear()
-        self.log_widgets.clear()
+        self.well_containers.clear()
         self.stack.setCurrentIndex(0)
 
     def _exit_app(self):
@@ -811,22 +974,8 @@ class MCCB_UI(QWidget):
         QApplication.instance().quit()
 
     def _open_mode(self, mode):
-        dlg = ModeDialog(mode, self.serial_threads, self.log_widgets, self)
+        dlg = ModeDialog(mode, self.serial_threads, self)
         dlg.exec_()
-
-    def _on_json(self, well_num, obj):
-        """Route JSON data to appropriate log widgets based on content"""
-        if 'well' in obj and obj['well'] == well_num:
-            # Send to combined log
-            if well_num in self.log_widgets:
-                self.log_widgets[well_num].latest = obj
-                # We don't directly update the display here, raw_line handles that
-            
-            # Also route to specific views if they exist
-            if 'voltage' in obj and f"{well_num}_electric" in self.log_widgets:
-                self.log_widgets[f"{well_num}_electric"].latest["electric"] = obj
-            if 'gauss' in obj and f"{well_num}_magnetic" in self.log_widgets:
-                self.log_widgets[f"{well_num}_magnetic"].latest["magnetic"] = obj
 
     def _on_conn_lost(self, well_num):
         show_message(self, "CONNECTION LOST",
@@ -850,14 +999,13 @@ class MCCB_UI(QWidget):
         e.accept()
 
 # =============================================
-# Mode dialog
+# Mode dialog - Fixed for well-based architecture
 # =============================================
 class ModeDialog(QDialog):
-    def __init__(self, mode, serial_threads, log_widgets, parent=None):
+    def __init__(self, mode, serial_threads, parent=None):
         super().__init__(parent)
         self.mode           = mode
         self.serial_threads = serial_threads
-        self.log_widgets    = log_widgets
         self.is_applying    = False
         self._positioned    = False
 
@@ -925,10 +1073,14 @@ class ModeDialog(QDialog):
                 form.addRow("<span style='font-weight:700; font-size:13px;'>MAGNETIC (GAUSS):</span>", m_input)
 
             gb.setLayout(form)
-            row = (i - 1) // 2
-            col = (i - 1) % 2
+            
+            # FIX: Use well_num instead of undefined 'i'
+            row = (well_num - 1) // 2
+            col = (well_num - 1) % 2
             wells_grid.addWidget(gb, row, col)
-            self.inputs.append({"electric": e_input, "magnetic": m_input})
+            
+            # FIX: Include well number in the dict
+            self.inputs.append({"well": well_num, "electric": e_input, "magnetic": m_input})
 
         left_layout.addLayout(wells_grid)
 
@@ -1036,7 +1188,7 @@ class ModeDialog(QDialog):
             return
 
         for well_key, cmd in commands:
-            if well_key in self.serial_threads:
+            if well_key in self.serial_threads and self.serial_threads[well_key] is not None:
                 self.serial_threads[well_key].send(cmd)
             else:
                 show_message(self, "DEVICE NOT CONNECTED",
@@ -1048,7 +1200,7 @@ class ModeDialog(QDialog):
         msg_text = f"✓ {len(commands)} COMMAND(S) TRANSMITTED.\n\n"
         if summary:
             msg_text += "VALUES SENT:\n" + "\n".join(summary) + "\n\n"
-        msg_text += "Check the sensor tabs for live readings."
+        msg_text += "Check the well sensor tabs for live readings."
 
         show_message(self, "SETTINGS APPLIED", msg_text,
                      QMessageBox.Information, auto_close_ms=2000)
@@ -1064,12 +1216,24 @@ class ModeDialog(QDialog):
 # Entry point
 # =============================================
 if __name__ == "__main__":
-    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    import os
+    import sys
     
+    print("--- 1. SCRIPT STARTED ---")
+    
+    os.environ["QT_SCALE_FACTOR"] = "1"
+    
+    print("--- 2. INITIALIZING QT ---")
     app = QApplication(sys.argv)
+    
+    print("--- 3. QT INITIALIZED, APPLYING STYLES ---")
     app.setStyleSheet(SWISS_QSS)
     
+    print("--- 4. CREATING MAIN WINDOW ---")
     window = MCCB_UI()
-    window.showFullScreen()
+    
+    print("--- 5. SHOWING WINDOW ---")
+    window.showMaximized()
+    
+    print("--- 6. STARTING EVENT LOOP ---")
     sys.exit(app.exec_())
