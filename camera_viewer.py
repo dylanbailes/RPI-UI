@@ -40,8 +40,8 @@ QPushButton {
     padding: 0px 8px;
     font-weight: bold;
     letter-spacing: 1px;
-    min-height: 24px;
-    max-height: 24px;
+    min-height: 16px;
+    max-height: 16px;
 }
 QPushButton:hover {
     background-color: #FF3000;
@@ -79,7 +79,8 @@ QComboBox {
     padding: 4px 8px;
     background-color: #FFFFFF;
     color: #000000;
-    min-height: 32px;
+    min-height: 16px;
+    max-height: 16px;
 }
 QComboBox::drop-down { border: none; width: 24px; }
 QComboBox QAbstractItemView {
