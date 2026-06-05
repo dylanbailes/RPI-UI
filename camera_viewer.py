@@ -15,7 +15,7 @@ from gi.repository import Aravis
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout,
     QHBoxLayout, QGridLayout, QComboBox, QGroupBox, QSizePolicy,
-    QFileDialog, QScrollArea
+    QFileDialog
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QMutex, QMutexLocker
 from PyQt5.QtGui import QImage, QPixmap
@@ -23,7 +23,7 @@ from PyQt5.QtGui import QImage, QPixmap
 import os
 
 # ---------------------------------------------------------------------------
-# Swiss International Style
+# Swiss International Style (Ultra-Compact)
 # ---------------------------------------------------------------------------
 STYLE = """
 QWidget {
@@ -37,10 +37,10 @@ QPushButton {
     color: #FFFFFF;
     border: 2px solid #000000;
     border-radius: 0px;
-    padding: 0px 8px;
+    padding: 0px 4px;
     font-weight: bold;
     letter-spacing: 1px;
-    min-height: 32px;
+    min-height: 28px;
 }
 QPushButton:hover {
     background-color: #FF3000;
@@ -66,10 +66,10 @@ QPushButton#apply_btn {
     color: #FFFFFF;
     border: 2px solid #000000;
     font-weight: 900;
-    font-size: 14px;
+    font-size: 13px;
     text-transform: uppercase;
     letter-spacing: 1px;
-    min-height: 48px;
+    min-height: 36px;
 }
 QPushButton#apply_btn:hover {
     background-color: #FF3000;
@@ -89,10 +89,10 @@ QPushButton#exit_btn:hover {
 QComboBox {
     border: 2px solid #000000;
     border-radius: 0px;
-    padding: 4px 8px;
+    padding: 2px 6px;
     background-color: #FFFFFF;
     color: #000000;
-    min-height: 32px;
+    min-height: 28px;
 }
 QComboBox::drop-down { border: none; width: 24px; }
 QComboBox QAbstractItemView {
@@ -104,7 +104,7 @@ QComboBox QAbstractItemView {
 QGroupBox {
     border: 2px solid #000000;
     border-radius: 0px;
-    margin-top: 20px;
+    margin-top: 14px;
     font-weight: bold;
     letter-spacing: 1px;
 }
@@ -113,7 +113,8 @@ QGroupBox::title {
     subcontrol-position: top left;
     background-color: #000000;
     color: #FFFFFF;
-    padding: 2px 8px;
+    padding: 2px 6px;
+    font-size: 11px;
 }
 """
 
@@ -226,39 +227,45 @@ class CameraTile(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        # Zero margins and spacing to eliminate ALL gaps
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # header
-        header = QLabel(f"  WELL {self._well_index + 1:02d}")
-        header.setFixedHeight(24)
-        header.setStyleSheet("background-color:#000000; color:#FFFFFF; font-weight:bold; letter-spacing:1px; font-size:11px;")
+        # Ultra-compact header
+        header = QLabel(f"WELL {self._well_index + 1:02d}")
+        header.setFixedHeight(20)
+        header.setStyleSheet("background-color:#000000; color:#FFFFFF; font-weight:bold; letter-spacing:1px; font-size:11px; padding-left: 4px; padding-top: 2px;")
         layout.addWidget(header)
 
-        # video label with overlaid status
-        video_container = QWidget()
-        video_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        video_container.setStyleSheet("background-color:#000000;")
+        # Video container with internal layout (no manual resize needed, no gaps)
+        self.video_container = QWidget()
+        self.video_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video_container.setStyleSheet("background-color:#000000; border: 2px solid #000000;")
+        
+        video_layout = QVBoxLayout(self.video_container)
+        video_layout.setContentsMargins(0, 0, 0, 0)
+        video_layout.setSpacing(0)
 
-        self.video_label = QLabel(video_container)
+        self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.video_label.setStyleSheet("background-color:#000000; border: 2px solid #000000;")
+        self.video_label.setStyleSheet("background-color:#000000;")
         self.video_label.setScaledContents(True)
+        video_layout.addWidget(self.video_label)
 
-        self.status_label = QLabel("STOPPED", video_container)
+        self.status_label = QLabel("STOPPED", self.video_container)
         self.status_label.setStyleSheet(
             "color:#FFFFFF; font-size:10px; letter-spacing:1px; "
             "background-color: rgba(0,0,0,160); padding: 1px 4px;"
         )
         self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        self.status_label.move(6, 6)
+        self.status_label.move(4, 4)
         self.status_label.raise_()
 
-        layout.addWidget(video_container, stretch=1)
+        layout.addWidget(self.video_container, stretch=1)
 
-        # buttons - directly under video with no spacing
+        # Buttons flush against video container
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 0, 0, 0)
         footer.setSpacing(0)
@@ -280,7 +287,7 @@ class CameraTile(QWidget):
 
         for btn in (self.btn_start, self.btn_stop, self.btn_snap):
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            btn.setFixedHeight(32)
+            btn.setFixedHeight(28)
             footer.addWidget(btn)
         layout.addLayout(footer)
 
@@ -302,7 +309,7 @@ class CameraTile(QWidget):
             self._thread.stop()
             self._thread = None
         self.video_label.clear()
-        self.video_label.setStyleSheet("background-color:#000000; border: 2px solid #000000;")
+        self.video_label.setStyleSheet("background-color:#000000;")
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.btn_snap.setEnabled(False)
@@ -339,16 +346,9 @@ class CameraTile(QWidget):
             self._thread.stop()
             self._thread = None
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if hasattr(self, 'video_label'):
-            parent = self.video_label.parent()
-            if parent:
-                self.video_label.setGeometry(0, 0, parent.width(), parent.height())
-
 
 # ---------------------------------------------------------------------------
-# CameraSettingsPanel
+# CameraSettingsPanel (Ultra-Compact)
 # ---------------------------------------------------------------------------
 class CameraSettingsPanel(QWidget):
     settings_changed = pyqtSignal(int, float, int)
@@ -375,7 +375,7 @@ class CameraSettingsPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedWidth(240)
+        self.setFixedWidth(220)  # Reduced from 240 to give more room to cameras
         self._build_ui()
 
     def _build_ui(self):
@@ -383,17 +383,18 @@ class CameraSettingsPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        header = QLabel("  CAMERA SETTINGS")
-        header.setFixedHeight(40)
-        header.setStyleSheet("background-color:#000000; color:#FFFFFF; font-size:14px; font-weight:bold; letter-spacing:2px; padding-left:4px;")
+        header = QLabel("CAMERA SETTINGS")
+        header.setFixedHeight(28)
+        header.setStyleSheet("background-color:#000000; color:#FFFFFF; font-size:12px; font-weight:bold; letter-spacing:2px; padding-left:8px; padding-top: 4px;")
         layout.addWidget(header)
 
         inner = QVBoxLayout()
-        inner.setContentsMargins(12, 12, 12, 12)
-        inner.setSpacing(12)
+        inner.setContentsMargins(6, 6, 6, 6)
+        inner.setSpacing(6)  # Reduced from 12 to 6
 
         exp_group = QGroupBox("EXPOSURE")
         exp_layout = QVBoxLayout(exp_group)
+        exp_layout.setContentsMargins(6, 14, 6, 6)
         self.combo_exposure = QComboBox()
         for label, _ in self.EXPOSURE_OPTIONS:
             self.combo_exposure.addItem(label)
@@ -403,6 +404,7 @@ class CameraSettingsPanel(QWidget):
 
         gain_group = QGroupBox("GAIN")
         gain_layout = QVBoxLayout(gain_group)
+        gain_layout.setContentsMargins(6, 14, 6, 6)
         self.combo_gain = QComboBox()
         for label, _ in self.GAIN_OPTIONS:
             self.combo_gain.addItem(label)
@@ -411,6 +413,7 @@ class CameraSettingsPanel(QWidget):
 
         fps_group = QGroupBox("FRAME RATE")
         fps_layout = QVBoxLayout(fps_group)
+        fps_layout.setContentsMargins(6, 14, 6, 6)
         self.combo_fps = QComboBox()
         for v in self.FPS_OPTIONS:
             self.combo_fps.addItem(f"{v} FPS")
@@ -420,14 +423,19 @@ class CameraSettingsPanel(QWidget):
 
         btn_apply = QPushButton("APPLY TO ALL")
         btn_apply.setObjectName("apply_btn")
+        btn_apply.setFixedHeight(36)
         btn_apply.clicked.connect(self._emit_settings)
         inner.addWidget(btn_apply)
 
         snap_group = QGroupBox("SNAPSHOTS")
         snap_layout = QVBoxLayout(snap_group)
-        snap_layout.addWidget(QLabel("~/mccb_snapshots/"))
+        snap_layout.setContentsMargins(6, 14, 6, 6)
+        lbl = QLabel("~/mccb_snapshots/")
+        lbl.setStyleSheet("font-size: 10px; margin-bottom: 4px;")
+        snap_layout.addWidget(lbl)
         btn_open = QPushButton("OPEN FOLDER")
         btn_open.setObjectName("secondary")
+        btn_open.setFixedHeight(36)
         btn_open.clicked.connect(self._open_dir)
         snap_layout.addWidget(btn_open)
         inner.addWidget(snap_group)
@@ -470,7 +478,6 @@ class CameraViewerWidget(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # body
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
