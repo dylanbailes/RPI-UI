@@ -3,6 +3,7 @@
  * ========================================================================== */
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import './styles.css';
 
 // 1. IMPORT ALL FILES SO THEY EXECUTE AND ATTACH TO THE WINDOW OBJECT
 import './data.js';         // <--- THIS WAS MISSING! Creates window.MCCB
