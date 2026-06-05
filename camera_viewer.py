@@ -15,16 +15,15 @@ from gi.repository import Aravis
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout,
     QHBoxLayout, QGridLayout, QComboBox, QGroupBox, QSizePolicy,
-    QFileDialog, QMessageBox
+    QFileDialog
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QMutex, QMutexLocker
-from PyQt5.QtGui import QImage, QPixmap, QFont
+from PyQt5.QtGui import QImage, QPixmap
 
-import cv2
 import os
 
 # ---------------------------------------------------------------------------
-# Swiss International Style — must match mccb_template_test.py exactly
+# Swiss International Style
 # ---------------------------------------------------------------------------
 STYLE = """
 QWidget {
@@ -33,7 +32,6 @@ QWidget {
     font-family: 'Inter', 'Helvetica', 'Arial', sans-serif;
     font-size: 12px;
 }
-
 QPushButton {
     background-color: #000000;
     color: #FFFFFF;
@@ -42,7 +40,6 @@ QPushButton {
     padding: 8px 16px;
     font-weight: bold;
     letter-spacing: 1px;
-    text-transform: uppercase;
     min-height: 48px;
 }
 QPushButton:hover {
@@ -54,7 +51,6 @@ QPushButton:disabled {
     border-color: #999999;
     color: #CCCCCC;
 }
-
 QPushButton#secondary {
     background-color: #FFFFFF;
     color: #000000;
@@ -65,20 +61,17 @@ QPushButton#secondary:hover {
     color: #FFFFFF;
     border-color: #FF3000;
 }
-
 QPushButton#exit_btn {
     background-color: #FF3000;
     color: #FFFFFF;
     border: 2px solid #FF3000;
     min-height: 48px;
     font-weight: bold;
-    letter-spacing: 1px;
 }
 QPushButton#exit_btn:hover {
     background-color: #000000;
     border-color: #000000;
 }
-
 QComboBox {
     border: 2px solid #000000;
     border-radius: 0px;
@@ -87,17 +80,13 @@ QComboBox {
     color: #000000;
     min-height: 32px;
 }
-QComboBox::drop-down {
-    border: none;
-    width: 24px;
-}
+QComboBox::drop-down { border: none; width: 24px; }
 QComboBox QAbstractItemView {
     border: 2px solid #000000;
     background-color: #FFFFFF;
     selection-background-color: #000000;
     selection-color: #FFFFFF;
 }
-
 QGroupBox {
     border: 2px solid #000000;
     border-radius: 0px;
@@ -111,98 +100,55 @@ QGroupBox::title {
     background-color: #000000;
     color: #FFFFFF;
     padding: 2px 8px;
-    text-transform: uppercase;
-}
-
-QLabel#section_header {
-    background-color: #000000;
-    color: #FFFFFF;
-    font-size: 14px;
-    font-weight: bold;
-    letter-spacing: 2px;
-    padding: 8px 12px;
-}
-QLabel#section_number {
-    color: #FF3000;
-    font-weight: bold;
-    font-size: 14px;
-    letter-spacing: 2px;
-}
-QLabel#tile_header {
-    background-color: #000000;
-    color: #FFFFFF;
-    font-size: 11px;
-    font-weight: bold;
-    letter-spacing: 1px;
-    padding: 4px 8px;
-}
-QLabel#video_label {
-    background-color: #000000;
-    color: #666666;
-    border: 2px solid #000000;
-}
-QLabel#status_label {
-    color: #000000;
-    font-size: 11px;
-    letter-spacing: 1px;
-    padding: 2px 0px;
-}
-QLabel#status_label[status="live"] {
-    color: #FF3000;
-}
-QLabel#status_label[status="stopped"] {
-    color: #000000;
 }
 """
 
 
 # ---------------------------------------------------------------------------
-# CameraThread — background acquisition using Aravis, one thread per camera
+# CameraThread
 # ---------------------------------------------------------------------------
 class CameraThread(QThread):
     frame_ready = pyqtSignal(np.ndarray)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, camera_id: str, parent=None):
+    def __init__(self, camera_id, parent=None):
         super().__init__(parent)
-        self._camera_id = camera_id   # Aravis device ID string
+        self._camera_id = camera_id
         self._running = False
         self._mutex = QMutex()
-        self._exposure_us = 5000      # microseconds
+        self._exposure_us = 5000
         self._gain = 0.0
-        self._target_fps = 10
+        self._fps = 10
 
-    # --- public control ---
-    def set_exposure(self, us: int):
+    def set_exposure(self, us):
         with QMutexLocker(self._mutex):
             self._exposure_us = us
 
-    def set_gain(self, gain: float):
+    def set_gain(self, gain):
         with QMutexLocker(self._mutex):
             self._gain = gain
 
-    def set_fps(self, fps: int):
+    def set_fps(self, fps):
         with QMutexLocker(self._mutex):
-            self._target_fps = fps
+            self._fps = fps
 
     def stop(self):
         self._running = False
         self.wait(3000)
 
-    # --- thread body ---
     def run(self):
         try:
             Aravis.update_device_list()
             camera = Aravis.Camera.new(self._camera_id)
         except Exception as e:
-            self.error_occurred.emit(f"Cannot open camera {self._camera_id}: {e}")
+            self.error_occurred.emit(f"Cannot open camera: {e}")
             return
 
         try:
             with QMutexLocker(self._mutex):
                 exp = self._exposure_us
                 gain = self._gain
-                fps = self._target_fps
+                fps = self._fps
 
             camera.set_exposure_time(float(exp))
             camera.set_gain(float(gain))
@@ -223,7 +169,6 @@ class CameraThread(QThread):
                 with QMutexLocker(self._mutex):
                     new_exp = self._exposure_us
                     new_gain = self._gain
-
                 try:
                     camera.set_exposure_time(float(new_exp))
                     camera.set_gain(float(new_gain))
@@ -236,11 +181,11 @@ class CameraThread(QThread):
                     continue
 
                 if buf.get_status() == Aravis.BufferStatus.SUCCESS:
+                    w = buf.get_image_width()
+                    h = buf.get_image_height()
                     data = buf.get_data()
-                    width = buf.get_image_width()
-                    height = buf.get_image_height()
-                    arr = np.frombuffer(data, dtype=np.uint8).reshape((height, width))
-                    self.frame_ready.emit(arr.copy())
+                    arr = np.frombuffer(data, dtype=np.uint8).reshape((h, w)).copy()
+                    self.frame_ready.emit(arr)
 
                 stream.push_buffer(buf)
 
@@ -254,17 +199,16 @@ class CameraThread(QThread):
 
 
 # ---------------------------------------------------------------------------
-# CameraTile — single well view: header / video / footer (START·STOP·SNAP)
+# CameraTile
 # ---------------------------------------------------------------------------
 class CameraTile(QWidget):
-    def __init__(self, well_index: int, camera_id: str | None, parent=None):
+    def __init__(self, well_index, camera_id, parent=None):
         super().__init__(parent)
         self._well_index = well_index
         self._camera_id = camera_id
-        self._thread: CameraThread | None = None
+        self._thread = None
         self._snapshot_dir = os.path.expanduser("~/mccb_snapshots")
         os.makedirs(self._snapshot_dir, exist_ok=True)
-
         self._build_ui()
 
     def _build_ui(self):
@@ -272,47 +216,40 @@ class CameraTile(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # --- header bar ---
-        header = QLabel(f"WELL {self._well_index + 1:02d}")
-        header.setObjectName("tile_header")
-        header.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        # header
+        header = QLabel(f"  WELL {self._well_index + 1:02d}")
+        header.setFixedHeight(28)
+        header.setStyleSheet("background-color:#000000; color:#FFFFFF; font-weight:bold; letter-spacing:1px; font-size:11px;")
         layout.addWidget(header)
 
-        # --- video display ---
+        # video label — fills all available space, no aspect ratio letterboxing
         self.video_label = QLabel()
-        self.video_label.setObjectName("video_label")
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setText("NO SIGNAL")
-        self.video_label.setMinimumSize(320, 240)
+        self.video_label.setMinimumSize(200, 150)
         self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video_label.setStyleSheet("background-color:#000000; border: 2px solid #000000;")
+        self.video_label.setScaledContents(True)  # fills label exactly, no black bars
         layout.addWidget(self.video_label, stretch=1)
 
-        # --- status row ---
+        # status
         status_row = QHBoxLayout()
         status_row.setContentsMargins(4, 2, 4, 2)
         self.status_label = QLabel("STOPPED")
-        self.status_label.setObjectName("status_label")
-        self.status_label.setProperty("status", "stopped")
+        self.status_label.setStyleSheet("color:#000000; font-size:11px; letter-spacing:1px;")
         status_row.addWidget(self.status_label)
         status_row.addStretch()
-        if self._camera_id is None:
-            no_cam = QLabel("NO CAMERA")
-            no_cam.setObjectName("status_label")
-            no_cam.setStyleSheet("color: #999999;")
-            status_row.addWidget(no_cam)
         layout.addLayout(status_row)
 
-        # --- footer buttons ---
+        # buttons
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 0, 0, 0)
         footer.setSpacing(0)
 
         self.btn_start = QPushButton("START")
-        self.btn_stop = QPushButton("STOP")
-        self.btn_snap = QPushButton("SNAP")
+        self.btn_stop  = QPushButton("STOP")
+        self.btn_snap  = QPushButton("SNAP")
         self.btn_stop.setObjectName("secondary")
         self.btn_snap.setObjectName("secondary")
-
         self.btn_stop.setEnabled(False)
         self.btn_snap.setEnabled(False)
 
@@ -326,10 +263,8 @@ class CameraTile(QWidget):
         for btn in (self.btn_start, self.btn_stop, self.btn_snap):
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             footer.addWidget(btn)
-
         layout.addLayout(footer)
 
-    # --- streaming ---
     def start_stream(self):
         if self._thread and self._thread.isRunning():
             return
@@ -337,71 +272,48 @@ class CameraTile(QWidget):
         self._thread.frame_ready.connect(self._on_frame)
         self._thread.error_occurred.connect(self._on_error)
         self._thread.start()
-
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.btn_snap.setEnabled(True)
-        self._set_status("LIVE", "live")
+        self.status_label.setText("LIVE")
+        self.status_label.setStyleSheet("color:#FF3000; font-size:11px; letter-spacing:1px;")
 
     def stop_stream(self):
         if self._thread:
             self._thread.stop()
             self._thread = None
+        self.video_label.clear()
+        self.video_label.setStyleSheet("background-color:#000000; border: 2px solid #000000;")
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.btn_snap.setEnabled(False)
-        self.video_label.setText("NO SIGNAL")
-        self._set_status("STOPPED", "stopped")
+        self.status_label.setText("STOPPED")
+        self.status_label.setStyleSheet("color:#000000; font-size:11px; letter-spacing:1px;")
 
-    def apply_settings(self, exposure_us: int, gain: float, fps: int):
+    def apply_settings(self, exposure_us, gain, fps):
         if self._thread:
             self._thread.set_exposure(exposure_us)
             self._thread.set_gain(gain)
             self._thread.set_fps(fps)
 
-    # --- snapshot ---
     def take_snapshot(self):
-        pixmap = self.video_label.pixmap()
-        if pixmap is None or pixmap.isNull():
-            return
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        filename = os.path.join(
-            self._snapshot_dir,
-            f"well{self._well_index + 1:02d}_{ts}.png"
-        )
-        pixmap.save(filename)
+        pix = self.video_label.pixmap()
+        if pix and not pix.isNull():
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            path = os.path.join(self._snapshot_dir, f"well{self._well_index+1:02d}_{ts}.png")
+            pix.save(path)
 
-    # --- slots ---
-    def _on_frame(self, arr: np.ndarray):
+    def _on_frame(self, arr):
         h, w = arr.shape
-        display = cv2.resize(
-            arr,
-            (self.video_label.width(), self.video_label.height()),
-            interpolation=cv2.INTER_LINEAR
-        )
-        display = np.ascontiguousarray(display)
-        dh, dw = display.shape
-        stride = display.strides[0]
-        qimg = QImage(display.data, dw, dh, stride, QImage.Format_Grayscale8)
-        print(f"[QIMG] isNull={qimg.isNull()} size={qimg.width()}x{qimg.height()}")
-        pix = QPixmap.fromImage(qimg)
-        print(f"[PIX] isNull={pix.isNull()} size={pix.width()}x{pix.height()}")
-        self.video_label.setPixmap(pix)
-        self.video_label.repaint()
+        qimg = QImage(arr.data, w, h, w, QImage.Format_Grayscale8)
+        self.video_label.setPixmap(QPixmap.fromImage(qimg))
 
-    def _on_error(self, msg: str):
-        print(f"[CAMERA ERROR] Well {self._well_index + 1}: {msg}")
-        self.video_label.setText(f"ERROR\n{msg}")
-        self._set_status("ERROR", "stopped")
+    def _on_error(self, msg):
+        self.status_label.setText("ERROR")
+        self.status_label.setStyleSheet("color:#FF3000; font-size:11px; letter-spacing:1px;")
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.btn_snap.setEnabled(False)
-
-    def _set_status(self, text: str, status_prop: str):
-        self.status_label.setText(text)
-        self.status_label.setProperty("status", status_prop)
-        self.status_label.style().unpolish(self.status_label)
-        self.status_label.style().polish(self.status_label)
 
     def cleanup(self):
         if self._thread and self._thread.isRunning():
@@ -410,10 +322,10 @@ class CameraTile(QWidget):
 
 
 # ---------------------------------------------------------------------------
-# CameraSettingsPanel — 300px docked right panel
+# CameraSettingsPanel
 # ---------------------------------------------------------------------------
 class CameraSettingsPanel(QWidget):
-    settings_changed = pyqtSignal(int, float, int)  # exposure_us, gain, fps
+    settings_changed = pyqtSignal(int, float, int)
 
     EXPOSURE_OPTIONS = [
         ("500 µs",   500),
@@ -446,24 +358,23 @@ class CameraSettingsPanel(QWidget):
         layout.setSpacing(0)
 
         header = QLabel("  CAMERA SETTINGS")
-        header.setObjectName("section_header")
+        header.setFixedHeight(40)
+        header.setStyleSheet("background-color:#000000; color:#FFFFFF; font-size:14px; font-weight:bold; letter-spacing:2px; padding-left:4px;")
         layout.addWidget(header)
 
         inner = QVBoxLayout()
         inner.setContentsMargins(12, 12, 12, 12)
         inner.setSpacing(16)
 
-        # exposure
         exp_group = QGroupBox("EXPOSURE")
         exp_layout = QVBoxLayout(exp_group)
         self.combo_exposure = QComboBox()
         for label, _ in self.EXPOSURE_OPTIONS:
             self.combo_exposure.addItem(label)
-        self.combo_exposure.setCurrentIndex(3)  # 5ms default
+        self.combo_exposure.setCurrentIndex(3)
         exp_layout.addWidget(self.combo_exposure)
         inner.addWidget(exp_group)
 
-        # gain
         gain_group = QGroupBox("GAIN")
         gain_layout = QVBoxLayout(gain_group)
         self.combo_gain = QComboBox()
@@ -472,35 +383,28 @@ class CameraSettingsPanel(QWidget):
         gain_layout.addWidget(self.combo_gain)
         inner.addWidget(gain_group)
 
-        # fps
         fps_group = QGroupBox("FRAME RATE")
         fps_layout = QVBoxLayout(fps_group)
         self.combo_fps = QComboBox()
         for v in self.FPS_OPTIONS:
             self.combo_fps.addItem(f"{v} FPS")
-        self.combo_fps.setCurrentIndex(1)  # 10fps default
+        self.combo_fps.setCurrentIndex(1)
         fps_layout.addWidget(self.combo_fps)
         inner.addWidget(fps_group)
 
-        # apply button
-        self.btn_apply = QPushButton("APPLY TO ALL")
-        self.btn_apply.clicked.connect(self._emit_settings)
-        inner.addWidget(self.btn_apply)
+        btn_apply = QPushButton("APPLY TO ALL")
+        btn_apply.clicked.connect(self._emit_settings)
+        inner.addWidget(btn_apply)
 
         inner.addStretch()
 
-        # snapshot dir info
         snap_group = QGroupBox("SNAPSHOTS")
         snap_layout = QVBoxLayout(snap_group)
-        snap_dir_label = QLabel("~/mccb_snapshots/")
-        snap_dir_label.setWordWrap(True)
-        snap_dir_label.setStyleSheet("color: #666666; font-size: 11px;")
-        snap_layout.addWidget(snap_dir_label)
-
-        self.btn_open_dir = QPushButton("OPEN FOLDER")
-        self.btn_open_dir.setObjectName("secondary")
-        self.btn_open_dir.clicked.connect(self._open_snapshot_dir)
-        snap_layout.addWidget(self.btn_open_dir)
+        snap_layout.addWidget(QLabel("~/mccb_snapshots/"))
+        btn_open = QPushButton("OPEN FOLDER")
+        btn_open.setObjectName("secondary")
+        btn_open.clicked.connect(self._open_dir)
+        snap_layout.addWidget(btn_open)
         inner.addWidget(snap_group)
 
         container = QWidget()
@@ -510,31 +414,30 @@ class CameraSettingsPanel(QWidget):
 
     def _emit_settings(self):
         exp_us = self.EXPOSURE_OPTIONS[self.combo_exposure.currentIndex()][1]
-        gain = self.GAIN_OPTIONS[self.combo_gain.currentIndex()][1]
-        fps = self.FPS_OPTIONS[self.combo_fps.currentIndex()]
+        gain   = self.GAIN_OPTIONS[self.combo_gain.currentIndex()][1]
+        fps    = self.FPS_OPTIONS[self.combo_fps.currentIndex()]
         self.settings_changed.emit(exp_us, gain, fps)
 
-    def _open_snapshot_dir(self):
+    def _open_dir(self):
         path = os.path.expanduser("~/mccb_snapshots")
         os.makedirs(path, exist_ok=True)
         QFileDialog.getOpenFileName(self, "SNAPSHOTS", path)
 
     def current_settings(self):
         exp_us = self.EXPOSURE_OPTIONS[self.combo_exposure.currentIndex()][1]
-        gain = self.GAIN_OPTIONS[self.combo_gain.currentIndex()][1]
-        fps = self.FPS_OPTIONS[self.combo_fps.currentIndex()]
+        gain   = self.GAIN_OPTIONS[self.combo_gain.currentIndex()][1]
+        fps    = self.FPS_OPTIONS[self.combo_fps.currentIndex()]
         return exp_us, gain, fps
 
 
 # ---------------------------------------------------------------------------
-# CameraViewerWidget — 2×2 grid of tiles + settings panel
-# Plug-in compatible: add as a tab in mccb_template_test.py
+# CameraViewerWidget
 # ---------------------------------------------------------------------------
 class CameraViewerWidget(QWidget):
-    def __init__(self, num_wells: int = 4, parent=None):
+    def __init__(self, num_wells=4, parent=None):
         super().__init__(parent)
         self._num_wells = num_wells
-        self._tiles: list[CameraTile] = []
+        self._tiles = []
         self._build_ui()
 
     def _build_ui(self):
@@ -542,44 +445,41 @@ class CameraViewerWidget(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # --- section header row with EXIT button ---
+        # header row
         hdr_row = QHBoxLayout()
         hdr_row.setContentsMargins(0, 0, 0, 0)
         hdr_row.setSpacing(0)
 
         num_label = QLabel("  04.")
-        num_label.setObjectName("section_number")
-        num_label.setFixedWidth(48)
+        num_label.setFixedWidth(56)
+        num_label.setFixedHeight(48)
         num_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        num_label.setStyleSheet(
-            "background-color: #000000; color: #FF3000; "
-            "font-weight: bold; font-size: 14px; letter-spacing: 2px; "
-            "padding: 8px 0px 8px 12px;"
-        )
+        num_label.setStyleSheet("background-color:#000000; color:#FF3000; font-weight:bold; font-size:14px; letter-spacing:2px; padding-left:8px;")
 
         title_label = QLabel("IMAGING")
-        title_label.setObjectName("section_header")
+        title_label.setFixedHeight(48)
+        title_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        title_label.setStyleSheet("background-color:#000000; color:#FFFFFF; font-size:14px; font-weight:bold; letter-spacing:2px; padding-left:8px;")
 
-        self.btn_exit = QPushButton("✕  EXIT")
-        self.btn_exit.setObjectName("exit_btn")
-        self.btn_exit.setFixedWidth(120)
-        self.btn_exit.setFixedHeight(48)
-        self.btn_exit.clicked.connect(self._on_exit)
+        btn_exit = QPushButton("✕  EXIT")
+        btn_exit.setObjectName("exit_btn")
+        btn_exit.setFixedWidth(120)
+        btn_exit.setFixedHeight(48)
+        btn_exit.clicked.connect(self._on_exit)
 
         hdr_row.addWidget(num_label)
         hdr_row.addWidget(title_label)
-        hdr_row.addWidget(self.btn_exit)
+        hdr_row.addWidget(btn_exit)
         root.addLayout(hdr_row)
 
-        # --- body: grid + panel ---
+        # body
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
 
-        # 2×2 grid
         camera_ids = self._enumerate_cameras()
-        print(f"[DEBUG] Cameras found at init: {camera_ids}")
+
         grid = QGridLayout()
         grid.setSpacing(2)
         grid.setContentsMargins(2, 2, 2, 2)
@@ -598,25 +498,20 @@ class CameraViewerWidget(QWidget):
         grid_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         body.addWidget(grid_container, stretch=1)
 
-        # settings panel
         self.settings_panel = CameraSettingsPanel()
-        self.settings_panel.settings_changed.connect(self._apply_settings_to_all)
+        self.settings_panel.settings_changed.connect(self._apply_settings)
         body.addWidget(self.settings_panel)
 
         root.addLayout(body, stretch=1)
 
-    # --- exit ---
     def _on_exit(self):
         self.stop_all()
-        # If running standalone, quit the app; if embedded, just stop cameras
         app = QApplication.instance()
         if app:
             app.quit()
 
-    # --- camera enumeration ---
     @staticmethod
-    def _enumerate_cameras() -> list[str]:
-        """Return list of Aravis device ID strings."""
+    def _enumerate_cameras():
         try:
             Aravis.update_device_list()
             count = Aravis.get_n_devices()
@@ -624,12 +519,10 @@ class CameraViewerWidget(QWidget):
         except Exception:
             return []
 
-    # --- settings ---
-    def _apply_settings_to_all(self, exposure_us: int, gain: float, fps: int):
+    def _apply_settings(self, exposure_us, gain, fps):
         for tile in self._tiles:
             tile.apply_settings(exposure_us, gain, fps)
 
-    # --- cleanup (called from mccb_template_test.py closeEvent) ---
     def stop_all(self):
         for tile in self._tiles:
             tile.cleanup()
@@ -644,7 +537,6 @@ if __name__ == "__main__":
 
     win = QWidget()
     win.setWindowTitle("MCCB — CAMERA VIEWER")
-    win.setStyleSheet(STYLE)
 
     layout = QVBoxLayout(win)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -654,9 +546,5 @@ if __name__ == "__main__":
 
     win.showFullScreen()
 
-    def on_close():
-        viewer.stop_all()
-        app.quit()
-
-    app.aboutToQuit.connect(on_close)
+    app.aboutToQuit.connect(viewer.stop_all)
     sys.exit(app.exec_())
