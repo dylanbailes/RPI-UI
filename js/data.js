@@ -1,19 +1,9 @@
 /* ============================================================================
- * data.js — MCCB telemetry engine + hardware seam
+ * data.js — MCCB telemetry engine + hardware seam (REAL HARDWARE MODE)
  * ----------------------------------------------------------------------------
- * This module is the ONE place that fakes the hardware. To run on the real Pi:
- *
- *   1. Replace DeviceSim.tick() with a parser fed by the pyserial / WebSerial
- *      stream. Each ESP32 line is JSON like {"voltage":..,"current":..,"gauss":..}.
- *      Call engine._ingest(wellNum, obj) with each parsed object.
- *   2. setParams() already emits the exact command object the firmware expects:
- *      {cmd:"set", well:N, voltage:v}  /  {cmd:"set", well:N, gauss:v}
- *      Wire engine.onCommand(cb) to your serial writer.
- *   3. enumeratePorts() / enumerateCameras() return the device lists — swap the
- *      stubs for serial.tools.list_ports / Aravis device enumeration.
- *
- * Everything the UI reads goes through this engine, so the visual layer never
- * needs to know whether data is real or simulated.
+ * Connects to the Python FastAPI backend via WebSocket.
+ * The UI components interact with MCCB.engine exactly as before, but all 
+ * telemetry and commands are now routed over the network to the Pi.
  * ========================================================================== */
 (function () {
   'use strict';
@@ -21,16 +11,15 @@
   // ---- Safety limits (mirror mccb_template_test.py) ----------------------
   const MAX_EFIELD = 1.5;   // V/cm
   const MAX_MAG    = 15.0;  // Gauss
-  const HISTORY    = 240;   // samples kept per metric (~24s @ 10Hz)
-  const TICK_MS    = 100;   // 10 Hz telemetry
+  const HISTORY    = 240;   // samples kept per metric
+  const TICK_MS    = 100;   // (Unused in real hardware mode, kept for compat)
 
-  // Derived/cosmetic hardware constants (only used by the simulator) --------
-  const ELECTRODE_GAP_CM = 0.5;   // efield(V/cm) * gap -> drive voltage(V)
-  const LOAD_KOHM        = 4.7;   // voltage / R -> current(mA)
-  const COIL_A_PER_G     = 42.0;  // gauss -> coil current(mA)
+  // Derived/cosmetic hardware constants (used if firmware sends voltage instead of efield)
+  const ELECTRODE_GAP_CM = 0.5;   
+  const LOAD_KOHM        = 4.7;   
+  const COIL_A_PER_G     = 42.0;  
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-  function noise(scale) { return (Math.random() - 0.5) * 2 * scale; }
 
   // ---- Ring buffer -------------------------------------------------------
   class Ring {
@@ -41,8 +30,7 @@
     clear() { this.buf = []; }
   }
 
-  // ---- Per-well device simulation ---------------------------------------
-  // On real hardware this class shrinks to just the ring buffers + _ingest.
+  // ---- Per-well device ---------------------------------------------------
   class WellDevice {
     constructor(num) {
       this.num = num;
@@ -50,10 +38,8 @@
       this.port = null;
       this.label = null;
 
-      // setpoints (what the user commanded)
       this.setEfield = 0;
       this.setGauss = 0;
-      // measured (what the sim/hardware reports)
       this.measEfield = 0;
       this.measGauss = 0;
       this.voltage = 0;
@@ -66,8 +52,7 @@
         voltage: new Ring(HISTORY),
         current: new Ring(HISTORY),
       };
-      this.log = [];           // raw JSON lines, like the QTextEdit feed
-      this._seeded = false;
+      this.log = [];
     }
 
     statusOf(meas, set, max) {
@@ -80,39 +65,11 @@
     get electricStatus() { return this.statusOf(this.measEfield, this.setEfield, MAX_EFIELD); }
     get magneticStatus() { return this.statusOf(this.measGauss, this.setGauss, MAX_MAG); }
 
-    // --- SIMULATION ONLY. Replace with _ingest() from real serial. ---------
-    tick(dt) {
-      if (!this.assigned) return null;
-      // first-order approach toward setpoint (time constant ~0.6s)
-      const k = 1 - Math.exp(-dt / 0.6);
-      this.measEfield += (this.setEfield - this.measEfield) * k;
-      this.measGauss  += (this.setGauss  - this.measGauss)  * k;
-
-      // sensor noise rides on top
-      const eNoise = this.setEfield > 0 ? noise(0.012) : noise(0.004);
-      const gNoise = this.setGauss  > 0 ? noise(0.10)  : noise(0.03);
-      const eMeas = clamp(this.measEfield + eNoise, 0, MAX_EFIELD * 1.05);
-      const gMeas = clamp(this.measGauss + gNoise, 0, MAX_MAG * 1.05);
-
-      const voltage = eMeas * ELECTRODE_GAP_CM;                 // V
-      const current = (voltage / LOAD_KOHM) * 1000;            // mA
-      const coil    = gMeas * COIL_A_PER_G + noise(2);         // mA
-
-      this._ingest({
-        well: this.num,
-        voltage: +voltage.toFixed(4),
-        current: +current.toFixed(3),
-        efield: +eMeas.toFixed(4),
-        gauss: +gMeas.toFixed(3),
-        coil: +Math.max(0, coil).toFixed(1),
-      });
-      return true;
-    }
-
-    // --- Universal ingest: feed this real parsed JSON on the Pi. -----------
+    // --- Universal ingest: feed this real parsed JSON from the backend. ----
     _ingest(obj) {
       if ('efield' in obj) this.history.efield.push(obj.efield);
       else if ('voltage' in obj) this.history.efield.push(obj.voltage / ELECTRODE_GAP_CM);
+      
       if ('gauss' in obj) this.history.gauss.push(obj.gauss);
       if ('voltage' in obj) { this.voltage = obj.voltage; this.history.voltage.push(obj.voltage); }
       if ('current' in obj) { this.current = obj.current; this.history.current.push(obj.current); }
@@ -133,46 +90,141 @@
     }
   }
 
-  // ---- Engine ------------------------------------------------------------
+  // =========================================================================
+  // ---- WebSocket Connection Manager (NEW) -------------------------------
+  // =========================================================================
+  let ws = null;
+  let wsConnected = false;
+  let cachedPorts = [];
+  let cachedCameras = [];
+
+  function connectToBackend() {
+    // Connect to the Python FastAPI backend running on the same host
+    const wsUrl = `ws://${window.location.hostname}:8000/ws/hardware`;
+    console.log(`[MCCB] Connecting to backend at ${wsUrl}...`);
+    ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      console.log('[MCCB] Connected to hardware backend');
+      wsConnected = true;
+      // Request initial device lists immediately upon connection
+      sendToBackend({ cmd: 'enumerate_ports' });
+      sendToBackend({ cmd: 'enumerate_cameras' });
+    };
+
+    ws.onmessage = (event) => {
+      // 1. Handle binary camera frames (Raw Mono8)
+      if (event.data instanceof ArrayBuffer) {
+        const view = new DataView(event.data);
+        const well = view.getUint8(0);
+        const w = view.getUint16(1);
+        const h = view.getUint16(3);
+        const pixels = new Uint8ClampedArray(event.data, 5);
+        
+        // Dispatch to imaging.jsx
+        window.dispatchEvent(new CustomEvent('mccb_camera_frame', { 
+          detail: { well, width: w, height: h, pixels } 
+        }));
+        return; // Stop processing, it's not JSON
+      }
+
+      // 2. Handle JSON telemetry/events (Your existing code)
+      try {
+        const msg = JSON.parse(event.data);
+        handleBackendMessage(msg);
+      } catch (e) {
+        console.error('[MCCB] Failed to parse backend message:', e);
+      }
+    };
+
+    ws.onclose = () => {
+      console.warn('[MCCB] Disconnected from backend. Reconnecting in 3s...');
+      wsConnected = false;
+      setTimeout(connectToBackend, 3000); // Auto-reconnect
+    };
+
+    ws.onerror = (err) => {
+      console.error('[MCCB] WebSocket error:', err);
+    };
+  }
+
+  function sendToBackend(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(obj));
+    }
+  }
+
+  function handleBackendMessage(msg) {
+    if (msg.type === 'telemetry') {
+      // msg format: { type: 'telemetry', well: 1, data: { voltage: ..., gauss: ... } }
+      const wellNum = msg.well;
+      if (engine.wells[wellNum]) {
+        engine.wells[wellNum]._ingest(msg.data);
+        engine._emit(); // Trigger UI charts/readouts to update
+      }
+    } 
+    else if (msg.type === 'ports') {
+      cachedPorts = msg.data;
+      // Notify connection.jsx that new port data is available
+      window.dispatchEvent(new CustomEvent('mccb_ports_ready', { detail: msg.data }));
+    }
+    else if (msg.type === 'cameras') {
+      cachedCameras = msg.data;
+      // Notify imaging.jsx that new camera data is available
+      window.dispatchEvent(new CustomEvent('mccb_cameras_ready', { detail: msg.data }));
+    }
+  }
+
+  // =========================================================================
+  // ---- Engine (Modified for Real Hardware) ------------------------------
+  // =========================================================================
   class Engine {
     constructor() {
       this.wells = {};
       for (let i = 1; i <= 4; i++) this.wells[i] = new WellDevice(i);
       this._subs = new Set();
       this._cmdSubs = new Set();
-      this._timer = null;
-      this._last = performance.now();
       this.running = false;
       this.globalStopped = false;
     }
 
-    // pub/sub: fired every telemetry tick
     subscribe(cb) { this._subs.add(cb); return () => this._subs.delete(cb); }
     onCommand(cb) { this._cmdSubs.add(cb); return () => this._cmdSubs.delete(cb); }
     _emit() { this._subs.forEach((cb) => cb(this)); }
-    _command(obj) { this._cmdSubs.forEach((cb) => cb(obj)); }
+    
+    // Intercept commands and send them to the Python backend
+    _command(obj) {
+      this._cmdSubs.forEach((cb) => cb(obj));
+      sendToBackend(obj); 
+    }
 
     start() {
-      if (this._timer) return;
-      this._last = performance.now();
-      this._timer = setInterval(() => {
-        const now = performance.now();
-        const dt = (now - this._last) / 1000;
-        this._last = now;
-        let any = false;
-        for (const w of Object.values(this.wells)) if (w.tick(dt)) any = true;
-        this.running = any;
-        this._emit();
-      }, TICK_MS);
+      if (this.running) return;
+      this.running = true;
+      connectToBackend(); // Start WebSocket instead of setInterval
     }
-    stop() { if (this._timer) { clearInterval(this._timer); this._timer = null; } }
 
+    stop() {
+      this.running = false;
+      if (ws) ws.close();
+    }
+
+    // Tell the backend to open/close serial connections
     assign(map) {
-      // map: { 1: {port, label}, ... }  unassigned wells omitted
       for (let i = 1; i <= 4; i++) {
         const w = this.wells[i];
-        if (map[i]) { w.assigned = true; w.port = map[i].port; w.label = map[i].label; }
-        else { w.assigned = false; w.port = null; w.label = null; w.reset(); }
+        if (map[i]) { 
+          w.assigned = true; 
+          w.port = map[i].port; 
+          w.label = map[i].label; 
+          sendToBackend({ cmd: 'connect_well', well: i, port: map[i].port });
+        } else { 
+          w.assigned = false; 
+          w.port = null; 
+          w.label = null; 
+          w.reset(); 
+          sendToBackend({ cmd: 'disconnect_well', well: i });
+        }
       }
     }
 
@@ -180,8 +232,14 @@
       const w = this.wells[wellNum];
       if (!w || !w.assigned) return;
       this.globalStopped = false;
-      if (efield != null) { w.setEfield = clamp(efield, 0, MAX_EFIELD); this._command({ cmd: 'set', well: wellNum, voltage: w.setEfield }); }
-      if (gauss != null)  { w.setGauss  = clamp(gauss, 0, MAX_MAG);     this._command({ cmd: 'set', well: wellNum, gauss: w.setGauss }); }
+      if (efield != null) { 
+        w.setEfield = clamp(efield, 0, MAX_EFIELD); 
+        this._command({ cmd: 'set', well: wellNum, voltage: w.setEfield }); 
+      }
+      if (gauss != null)  { 
+        w.setGauss  = clamp(gauss, 0, MAX_MAG);     
+        this._command({ cmd: 'set', well: wellNum, gauss: w.setGauss }); 
+      }
     }
 
     stopWell(wellNum) {
@@ -197,38 +255,28 @@
       this._command({ cmd: 'stop', well: 'all' });
     }
 
-    get assignedWells() {
-      return Object.values(this.wells).filter((w) => w.assigned).map((w) => w.num);
-    }
-    get anyActive() {
-      return Object.values(this.wells).some((w) => w.assigned && (w.setEfield > 0 || w.setGauss > 0));
-    }
+    get assignedWells() { return Object.values(this.wells).filter((w) => w.assigned).map((w) => w.num); }
+    get anyActive() { return Object.values(this.wells).some((w) => w.assigned && (w.setEfield > 0 || w.setGauss > 0)); }
   }
 
-  // ---- Device enumeration stubs -----------------------------------------
-  // Swap for serial.tools.list_ports.comports() on the Pi.
+  // ---- Device enumeration (Cached from backend) -------------------------
   function enumeratePorts() {
-    return [
-      { label: 'ESP32 — /dev/ttyUSB0 (CP210x UART Bridge)', port: '/dev/ttyUSB0', kind: 'ESP32' },
-      { label: 'ESP32 — /dev/ttyUSB1 (CP210x UART Bridge)', port: '/dev/ttyUSB1', kind: 'ESP32' },
-      { label: 'ESP32 — /dev/ttyUSB2 (CH340 Serial)',       port: '/dev/ttyUSB2', kind: 'ESP32' },
-      { label: 'Unknown — /dev/ttyACM0 (USB Serial Device)', port: '/dev/ttyACM0', kind: 'Unknown' },
-    ];
+    if (wsConnected) sendToBackend({ cmd: 'enumerate_ports' }); // Request refresh
+    return cachedPorts; // Return immediately (UI will update via event listener)
   }
-  // Swap for Aravis.get_device_id(i) on the Pi.
+
   function enumerateCameras() {
-    return [
-      { id: 'Aravis-GV-0001', present: true },
-      { id: 'Aravis-GV-0002', present: true },
-      { id: 'Aravis-GV-0003', present: true },
-      { id: null,             present: false }, // well 4 has no camera -> empty state
-    ];
+    if (wsConnected) sendToBackend({ cmd: 'enumerate_cameras' }); // Request refresh
+    return cachedCameras;
   }
+
+  const engine = new Engine();
 
   window.MCCB = {
     MAX_EFIELD, MAX_MAG, HISTORY,
-    engine: new Engine(),
-    enumeratePorts, enumerateCameras,
+    engine: engine,
+    enumeratePorts, 
+    enumerateCameras,
     clamp,
   };
 })();

@@ -1,18 +1,32 @@
-# Virtual environments
+# =============================================================================
+# Node.js / React / Vite (CRITICAL for your JS folder)
+# =============================================================================
+node_modules/
+.pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.vite/
+js/dist/
+js/build/
+
+# =============================================================================
+# Python Virtual Environments & Bytecode
+# =============================================================================
 venv/
 .venv/
 env/
 ENV/
 env.bak/
 venv.bak/
-
-# Python bytecode and cache
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 
-# Distribution / packaging
+# =============================================================================
+# Distribution / Packaging / Build Outputs
+# =============================================================================
 .Python
 build/
 develop-eggs/
@@ -30,12 +44,16 @@ wheels/
 .installed.cfg
 *.egg
 
-# Environment variables (keep secrets out of git!)
+# =============================================================================
+# Environment Variables & Secrets
+# =============================================================================
 .env
 .env.local
 .env.*.local
 
-# IDE and Editor files
+# =============================================================================
+# IDE, Editor, and OS Files
+# =============================================================================
 .vscode/
 .idea/
 *.swp
@@ -43,11 +61,19 @@ wheels/
 *~
 .DS_Store
 Thumbs.db
+*.sublime-project
+*.sublime-workspace
 
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints
-
-# Logs and temporary files
+# =============================================================================
+# Logs, Temporary Files, and App-Specific Data
+# =============================================================================
 *.log
+backend.log
 *.tmp
 *.temp
+.ipynb_checkpoints
+
+# Optional: If you ever save test snapshots in the repo directory
+snapshots/
+*.png
+*.jpg
