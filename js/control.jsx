@@ -213,8 +213,8 @@ function WellSummaryCard({ well, accent, onConfigure }) {
         <SummaryMetric label="Electric" set={well.setEfield} meas={well.measEfield} unit="V/cm"
           status={well.electricStatus} accent={accent} values={well.history.efield.values} max={window.MCCB.MAX_EFIELD} />
         <div style={{ width: 2, background: '#eee', alignSelf: 'stretch' }}></div>
-        <SummaryMetric label="Magnetic" set={well.setGauss} meas={well.measGauss} unit="G"
-          status={well.magneticStatus} accent={accent} values={well.history.gauss.values} max={window.MCCB.MAX_MAG} />
+        <SummaryMetric label="Magnetic" set={well.setGauss} meas={well.measGauss1} unit="G"
+          status={well.magneticStatus} accent={accent} values={well.history.gauss1.values} max={window.MCCB.MAX_MAG} />
       </div>
       <div className="row" style={{ padding: '0 12px 12px', gap: 8 }}>
         <button className="btn btn-secondary btn-sm" style={{ flex: 1, minHeight: 40 }} onClick={() => onConfigure(well.num, 'electric')}>Configure</button>

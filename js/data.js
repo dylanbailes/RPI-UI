@@ -22,21 +22,6 @@ function buildReverseLutFromArr(lutArr) {
     return reverse;
 }
 
-function physicalToPwm(target, lut) {
-  if (!lut || lut.length === 0) return 0.0;
-  if (target <= 0) return 0.0;
-  if (target >= lut[lut.length - 1].val) return lut[lut.length - 1].pwm;
-  
-  for (let i = 1; i < lut.length; i++) {
-    if (target <= lut[i].val) {
-      const p0 = lut[i - 1], p1 = lut[i];
-      const ratio = (target - p0.val) / (p1.val - p0.val);
-      return p0.pwm + ratio * (p1.pwm - p0.pwm);
-    }
-  }
-  return lut[lut.length - 1].pwm;
-}
-
 // =========================================================================
 // ---- LOOKUP TABLES (PWM % -> Physical Value) ----------------------------
 // =========================================================================
@@ -67,11 +52,13 @@ function buildReverseLut(forwardLut) {
 const GAUSS_LUT  = buildReverseLut(PWM_TO_GAUSS);
 const EFIELD_LUT = buildReverseLut(PWM_TO_EFIELD);
 
-// Interpolates the exact PWM % for a target physical value
+// Interpolates the exact PWM % for a target physical value.
+// Single definition — guards against empty/missing LUTs.
 function physicalToPwm(target, lut) {
+  if (!lut || lut.length === 0) return 0.0;
   if (target <= 0) return 0.0;
   if (target >= lut[lut.length - 1].val) return lut[lut.length - 1].pwm;
-  
+
   for (let i = 1; i < lut.length; i++) {
     if (target <= lut[i].val) {
       const p0 = lut[i - 1], p1 = lut[i];
@@ -287,24 +274,25 @@ class Engine {
   setParams(wellNum, { efield, gauss }) {
     const w = this.wells[wellNum];
     if (!w || !w.assigned) return;
-    
-    // ENFORCE CALIBRATION
-    if (gauss != null && !w.calibrated) {
+
+    this.globalStopped = false;
+
+    // Electric field has no LUT yet — scale linearly. Not gated by calibration.
+    if (efield != null) {
+      w.setEfield = clamp(efield, 0, MAX_EFIELD);
+      this._command({ cmd: 'set', well: wellNum, channel: 'e', pwm: w.setEfield * (100.0 / MAX_EFIELD) });
+    }
+
+    if (gauss != null) {
+      // ENFORCE CALIBRATION — only blocks the magnetic channel, not electric.
+      if (!w.calibrated) {
         console.warn("Cannot set Gauss: Well not calibrated!");
         window.dispatchEvent(new CustomEvent('mccb_toast', { detail: { kind: 'error', text: `Well ${wellNum} requires magnetic calibration first.` } }));
         return;
-    }
-
-    this.globalStopped = false;
-    if (efield != null) { 
-      w.setEfield = clamp(efield, 0, MAX_EFIELD); 
-      // Electric field doesn't have a LUT yet, so we scale linearly
-      this._command({ cmd: 'set', well: wellNum, channel: 'e', pwm: w.setEfield * (100.0 / MAX_EFIELD) }); 
-    }
-    if (gauss != null)  { 
-      w.setGauss = clamp(gauss, 0, MAX_MAG);     
+      }
+      w.setGauss = clamp(gauss, 0, MAX_MAG);
       const pwm = physicalToPwm(w.setGauss, w.reverseGaussLut);
-      this._command({ cmd: 'set', well: wellNum, channel: 'h', pwm: pwm }); 
+      this._command({ cmd: 'set', well: wellNum, channel: 'h', pwm: pwm });
     }
   }
 

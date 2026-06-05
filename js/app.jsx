@@ -99,6 +99,13 @@ function App() {
     return () => { window.removeEventListener('resize', fit); window.removeEventListener('load', fit); ro.disconnect(); };
   }, []);
 
+  // Surface engine-level toasts (e.g. calibration-required warnings) in the UI
+  React.useEffect(() => {
+    const handleToast = (e) => pushToast(e.detail);
+    window.addEventListener('mccb_toast', handleToast);
+    return () => window.removeEventListener('mccb_toast', handleToast);
+  }, []);
+
   function pushToast(o) {
     const id = Date.now() + Math.random();
     setToasts((s) => [...s.slice(-2), { ...o, id }]);
@@ -110,8 +117,10 @@ function App() {
     window.MCCB.engine.start();
     setPhase('main'); setTab('CONTROL');
     // seed a little activity so charts aren't empty on arrival
+    // NOTE: only seed efield — gauss requires calibration first, so seeding it
+    // here would trip a spurious "not calibrated" warning on connect.
     const wells = window.MCCB.engine.assignedWells;
-    if (wells[0]) window.MCCB.engine.setParams(wells[0], { efield: 0.9, gauss: 6 });
+    if (wells[0]) window.MCCB.engine.setParams(wells[0], { efield: 0.9 });
     if (wells[1]) window.MCCB.engine.setParams(wells[1], { efield: 0.4 });
   }
   function reconfigure() { window.MCCB.engine.stop(); setPhase('connect'); }
@@ -212,4 +221,4 @@ if (rootElement) {
   );
 } else {
   console.error("Could not find <div id='root'></div> in index.html!");
-} 
+}
