@@ -73,15 +73,28 @@ def serial_reader_loop(well_num, port, stop_event):
             data = ser.read(512).decode(errors='ignore')
             if data:
                 buf += data
-                while '\n' in buf:
-                    line, buf = buf.split('\n', 1)
-                    line = line.strip()
-                    if line:
-                        try:
-                            obj = json.loads(line)
-                            send_ws_sync("telemetry", {"well": well_num, "data": obj})
-                        except json.JSONDecodeError:
-                            pass
+            while '\n' in buf:
+                line, buf = buf.split('\n', 1)
+                line = line.strip()
+                if line:
+                    try:
+                        # 1. Try parsing as standard JSON first
+                        obj = json.loads(line)
+                        send_ws_sync("telemetry", {"well": well_num, "data": obj})
+                        
+                    except json.JSONDecodeError:
+                        # 2. FALLBACK: Parse space or comma separated values from ESP32
+                        # e.g., "12.34 56.78" or "12.34, 56.78"
+                        parts = line.replace(',', ' ').split()
+                        if len(parts) >= 2:
+                            try:
+                                obj = {
+                                    "gauss1": float(parts[0]),
+                                    "gauss2": float(parts[1])
+                                }
+                                send_ws_sync("telemetry", {"well": well_num, "data": obj})
+                            except ValueError:
+                                pass # Ignore malformed lines
     except Exception as e:
         send_ws_sync("error", {"well": well_num, "msg": str(e)})
     finally:

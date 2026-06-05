@@ -35,16 +35,21 @@ class WellDevice {
     this.setEfield = 0;
     this.setGauss = 0;
     this.measEfield = 0;
-    this.measGauss = 0;
-    this.measRms = 0;
-    this._hasRmsFromBackend = false; // Tracks if ESP32 is sending RMS directly
+    
+    // NEW: Dual Hall Effect tracking
+    this.measGauss1 = 0;
+    this.measGauss2 = 0;
+    this._sumSq1 = 0; // Running sum of squares for O(1) RMS calculation
+    this._sumSq2 = 0;
+    
     this.voltage = 0;
     this.current = 0;
     this.coilCurrent = 0;
 
     this.history = {
       efield: new Ring(HISTORY),
-      gauss: new Ring(HISTORY),
+      gauss1: new Ring(HISTORY), // NEW
+      gauss2: new Ring(HISTORY), // NEW
       voltage: new Ring(HISTORY),
       current: new Ring(HISTORY),
     };
@@ -59,55 +64,44 @@ class WellDevice {
     return 'LOCKED';
   }
   get electricStatus() { return this.statusOf(this.measEfield, this.setEfield, MAX_EFIELD); }
-  get magneticStatus() { return this.statusOf(this.measGauss, this.setGauss, MAX_MAG); }
+  get magneticStatus() { return this.statusOf(this.measGauss1, this.setGauss, MAX_MAG); }
 
   // Getter for RMS: returns backend value if provided, otherwise calculates from history
-  get rms() {
-    if (this._hasRmsFromBackend) return this.measRms;
-    const vals = this.history.gauss.values;
-    if (vals.length === 0) return 0;
-    const sumSquares = vals.reduce((acc, val) => acc + val * val, 0);
-    return Math.sqrt(sumSquares / vals.length);
+  get rms1() {
+    const len = this.history.gauss1.buf.length;
+    return len > 0 ? Math.sqrt(this._sumSq1 / len) : 0;
+  }
+  get rms2() {
+    const len = this.history.gauss2.buf.length;
+    return len > 0 ? Math.sqrt(this._sumSq2 / len) : 0;
   }
 
   _ingest(obj) {
-    let gaussVal = null;
-    let rmsVal = null;
-
-    // Flexibly parse: handles {gauss: X, rms: Y} OR [X, Y] from ESP32
-    if (Array.isArray(obj)) {
-      gaussVal = obj[0];
-      rmsVal = obj[1];
-    } else {
-      gaussVal = obj.gauss !== undefined ? obj.gauss : obj;
-      if ('rms' in obj) {
-        rmsVal = obj.rms;
-        this._hasRmsFromBackend = true;
-      }
-    }
-
-    if (gaussVal !== null) {
-      this.history.gauss.push(gaussVal);
-      this.measGauss = gaussVal;
-    }
+    if ('efield' in obj) this.history.efield.push(obj.efield);
+    else if ('voltage' in obj) this.history.efield.push(obj.voltage / ELECTRODE_GAP_CM);
     
-    if (rmsVal !== null) {
-      this.measRms = rmsVal;
+    // NEW: Ingest dual Hall effect sensors and maintain running sum of squares
+    if ('gauss1' in obj) {
+      const v = obj.gauss1;
+      const ring = this.history.gauss1;
+      if (ring.buf.length >= ring.n) this._sumSq1 -= ring.buf[0] ** 2; // Subtract outgoing sample
+      ring.push(v);
+      this._sumSq1 += v * v; // Add incoming sample
+      this.measGauss1 = v;
+    }
+    if ('gauss2' in obj) {
+      const v = obj.gauss2;
+      const ring = this.history.gauss2;
+      if (ring.buf.length >= ring.n) this._sumSq2 -= ring.buf[0] ** 2;
+      ring.push(v);
+      this._sumSq2 += v * v;
+      this.measGauss2 = v;
     }
 
-    if ('efield' in obj) {
-      this.history.efield.push(obj.efield);
-      this.measEfield = obj.efield;
-    } else if ('voltage' in obj) {
-      this.history.efield.push(obj.voltage / ELECTRODE_GAP_CM);
-      this.voltage = obj.voltage;
-      this.history.voltage.push(obj.voltage);
-    }
-    if ('current' in obj) {
-      this.current = obj.current;
-      this.history.current.push(obj.current);
-    }
+    if ('voltage' in obj) { this.voltage = obj.voltage; this.history.voltage.push(obj.voltage); }
+    if ('current' in obj) { this.current = obj.current; this.history.current.push(obj.current); }
     if ('coil' in obj) this.coilCurrent = obj.coil;
+    if ('efield' in obj) this.measEfield = obj.efield;
 
     const line = JSON.stringify(obj);
     this.log.push(line);
@@ -115,12 +109,15 @@ class WellDevice {
     return line;
   }
 
+
   reset() {
     this.setEfield = 0; this.setGauss = 0;
-    this.measEfield = 0; this.measGauss = 0;
-    this.measRms = 0;
-    this._hasRmsFromBackend = false;
+    this.measEfield = 0; this.measGauss1 = 0; this.measGauss2 = 0;
+    this._sumSq1 = 0; this._sumSq2 = 0; // Reset RMS sums
     this.voltage = 0; this.current = 0; this.coilCurrent = 0;
+    
+    // Clear history rings on reset
+    Object.values(this.history).forEach(ring => ring.clear());
   }
 }
 

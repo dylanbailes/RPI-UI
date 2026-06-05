@@ -70,6 +70,7 @@ function LiveChart({
   getSeries, getSetpoint, getLatest,
   max, color = '#FF3000', variant = 'area', grid = true,
   height = '100%', unit = '', label = '', tall = true,
+  colors = ['#FF3000', '#2A6FDB', '#1F8A5B', '#7A5AE0'] // Palette for multiple lines
 }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
@@ -96,9 +97,12 @@ function LiveChart({
     const padL = 6, padR = 6, padT = 10, padB = 6;
 
     function draw() {
-      const series = getSeries() || [];
+      const seriesData = getSeries() || [];
+      // Detect if we received multiple series (2D array) or a single series (1D array)
+      const isMulti = seriesData.length > 0 && Array.isArray(seriesData[0]);
+      const seriesList = isMulti ? seriesData : [seriesData];
+
       const setpoint = getSetpoint ? getSetpoint() : null;
-      const latest = getLatest ? getLatest() : (series.length ? series[series.length - 1] : 0);
       const yMax = max * 1.08;
       const plotW = W - padL - padR;
       const plotH = H - padT - padB;
@@ -109,31 +113,24 @@ function LiveChart({
 
       // grid
       if (grid) {
-        ctx.strokeStyle = '#ECECEC';
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#ECECEC'; ctx.lineWidth = 1;
         for (let g = 0; g <= 4; g++) {
           const y = padT + (g / 4) * plotH + 0.5;
           ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
         }
-        // vertical ticks
         for (let g = 0; g <= 6; g++) {
           const x = padL + (g / 6) * plotW + 0.5;
           ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, H - padB); ctx.stroke();
         }
       }
 
-      const n = series.length;
       // setpoint dashed line
       if (setpoint != null && setpoint > 0) {
         const ys = yOf(setpoint);
         ctx.save();
-        ctx.strokeStyle = color;
-        ctx.globalAlpha = 0.9;
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([6, 5]);
+        ctx.strokeStyle = color; ctx.globalAlpha = 0.9; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5]);
         ctx.beginPath(); ctx.moveTo(padL, ys); ctx.lineTo(W - padR, ys); ctx.stroke();
         ctx.restore();
-        // SET tag
         ctx.fillStyle = color;
         ctx.fillRect(W - padR - 46, ys - 9, 46, 14);
         ctx.fillStyle = '#fff';
@@ -142,19 +139,13 @@ function LiveChart({
         ctx.fillText('SET ' + setpoint.toFixed(2), W - padR - 43, ys - 1);
       }
 
-      if (n >= 2) {
-        if (variant === 'bars') {
-          const bw = Math.max(1.5, plotW / n - 1.5);
-          ctx.fillStyle = color;
-          for (let i = 0; i < n; i++) {
-            const x = xOf(i, n) - bw / 2;
-            const y = yOf(series[i]);
-            ctx.globalAlpha = 0.35 + 0.65 * (i / n);
-            ctx.fillRect(x, y, bw, (H - padB) - y);
-          }
-          ctx.globalAlpha = 1;
-        } else {
-          // build path
+      // Draw all series
+      let hasData = false;
+      seriesList.forEach((series, idx) => {
+        const c = colors[idx % colors.length];
+        const n = series.length;
+        if (n >= 2) {
+          hasData = true;
           ctx.beginPath();
           for (let i = 0; i < n; i++) {
             const x = xOf(i, n), y = yOf(series[i]);
@@ -165,34 +156,41 @@ function LiveChart({
             ctx.lineTo(xOf(0, n), H - padB);
             ctx.closePath();
             const grad = ctx.createLinearGradient(0, padT, 0, H - padB);
-            grad.addColorStop(0, hexA(color, 0.28));
-            grad.addColorStop(1, hexA(color, 0.02));
+            grad.addColorStop(0, hexA(c, 0.28));
+            grad.addColorStop(1, hexA(c, 0.02));
             ctx.fillStyle = grad;
             ctx.fill();
-            // redraw top stroke
             ctx.beginPath();
             for (let i = 0; i < n; i++) {
               const x = xOf(i, n), y = yOf(series[i]);
               i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
             }
           }
-          ctx.strokeStyle = variant === 'area' ? color : '#000000';
-          ctx.lineWidth = 2;
-          ctx.lineJoin = 'round';
+          ctx.strokeStyle = variant === 'area' ? c : '#000000';
+          ctx.lineWidth = 2; ctx.lineJoin = 'round';
           ctx.stroke();
         }
+      });
 
-        // leading dot + pulse
-        const lx = xOf(n - 1, n), ly = yOf(latest);
-        const t = (performance.now() % 1400) / 1400;
-        ctx.beginPath();
-        ctx.fillStyle = hexA(color, 0.25 * (1 - t));
-        ctx.arc(lx, ly, 4 + t * 9, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath();
-        ctx.fillStyle = color;
-        ctx.arc(lx, ly, 3.5, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
-      } else {
+      // leading dots for all series
+      seriesList.forEach((series, idx) => {
+        const c = colors[idx % colors.length];
+        const n = series.length;
+        if (n >= 2) {
+          const latest = series[n - 1];
+          const lx = xOf(n - 1, n), ly = yOf(latest);
+          const t = (performance.now() % 1400) / 1400;
+          ctx.beginPath();
+          ctx.fillStyle = hexA(c, 0.25 * (1 - t));
+          ctx.arc(lx, ly, 4 + t * 9, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath();
+          ctx.fillStyle = c;
+          ctx.arc(lx, ly, 3.5, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+        }
+      });
+
+      if (!hasData) {
         ctx.fillStyle = '#BBBBBB';
         ctx.font = '700 11px Helvetica, Arial, sans-serif';
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -203,8 +201,7 @@ function LiveChart({
     }
     rafRef.current = requestAnimationFrame(draw);
     return () => { cancelAnimationFrame(rafRef.current); ro.disconnect(); };
-    // eslint-disable-next-line
-  }, [variant, grid, color, max]);
+  }, [variant, grid, color, max, colors]);
 
   return (
     <div ref={wrapRef} style={{ position: 'relative', width: '100%', height }}>

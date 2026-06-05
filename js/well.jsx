@@ -90,13 +90,13 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
   useEngineTick(10);
   const isE = metric === 'electric';
   
+  // UPDATED: Pass both gauss1 and gauss2 arrays to the chart!
   const acc = isE
     ? { series: () => well.history.efield.values, setpoint: () => well.setEfield, latest: () => well.measEfield, max: window.MCCB.MAX_EFIELD }
-    : { series: () => well.history.gauss.values, setpoint: () => well.setGauss, latest: () => well.measGauss, max: window.MCCB.MAX_MAG };
+    : { series: () => [well.history.gauss1.values, well.history.gauss2.values], setpoint: () => well.setGauss, latest: () => well.measGauss1, max: window.MCCB.MAX_MAG };
     
   const status = isE ? well.electricStatus : well.magneticStatus;
   const title = isE ? 'Electric Field' : 'Magnetic Field';
-  const unit = isE ? 'V/cm' : 'Gauss';
   const filter = isE ? 'voltage' : 'gauss';
   
   const readouts = isE ? (
@@ -107,18 +107,19 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
       <Readout label="Current" value={well.current} decimals={2} unit="mA" />
     </React.Fragment>
   ) : (
+    // UPDATED: Show HE1, HE1 RMS, HE2, HE2 RMS
     <React.Fragment>
-      <Readout label="Setpoint" value={well.setGauss} unit="G" />
-      <Readout label="Measured" value={well.measGauss} unit="G" accent />
-      {/* NEW: RMS Readout for Magnetic Field */}
-      <Readout label="RMS (2s)" value={well.measRms || 0} unit="G" />
-      <Readout label="Coil Current" value={well.coilCurrent} decimals={1} unit="mA" />
+      <Readout label="HE1 Inst." value={well.measGauss1} unit="G" accent />
+      <Readout label="HE1 RMS (2s)" value={well.rms1} unit="G" />
+      <Readout label="HE2 Inst." value={well.measGauss2} unit="G" accent />
+      <Readout label="HE2 RMS (2s)" value={well.rms2} unit="G" />
     </React.Fragment>
   );
   
-  const roCols = isE ? 4 : 4; // Always 4 columns to accommodate RMS
+  const roCols = 4; // 4 columns fits perfectly for both views now
   const chart = <ChartCard title={title + ' — Measured vs Setpoint'} well={well} accessor={acc} accent={accent} variant={variant} grid={grid} />;
 
+  // ... The rest of MetricView remains exactly the same ...
   return (
     <div className="col grow" style={{ padding: 18, gap: 14 }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
