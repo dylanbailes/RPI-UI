@@ -1,7 +1,12 @@
+/* ============================================================================
+ * app.jsx — Shell: header, tab router, global E-STOP, toasts, Tweaks.
+ * ========================================================================== */
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 
-// 1. Import the files so they execute and attach components to the `window` object
+// 1. IMPORT ALL FILES SO THEY EXECUTE AND ATTACH TO THE WINDOW OBJECT
+import './data.js';         // <--- THIS WAS MISSING! Creates window.MCCB
+import './charts.jsx';      // <--- THIS WAS MISSING! Creates chart components
 import './connection.jsx';
 import './control.jsx';
 import './well.jsx';
@@ -13,6 +18,8 @@ const ControlTab = window.ControlTab;
 const ModeDialog = window.ModeDialog;
 const WellTab = window.WellTab;
 const ImagingTab = window.ImagingTab;
+
+// ... (leave the rest of the file exactly as it is) ...
 
 // ... (leave the rest of the file exactly as it is) ...
 // If you have a separate file for Tweaks, import them here. Otherwise, we use the fallbacks below.
