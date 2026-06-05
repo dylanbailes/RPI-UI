@@ -162,57 +162,53 @@ class IconButton(QPushButton):
         # Background
         p.fillRect(0, 0, w, h, bg)
 
-        # Border (2 px, white)
-        pen = QPen(self._C_BORDER, 2)
-        p.setPen(pen)
+        # Border — 1 px white inset
+        p.setPen(QPen(self._C_BORDER, 1))
+        p.setBrush(Qt.NoBrush)
         p.drawRect(1, 1, w - 2, h - 2)
 
-        # Icon
         ic = self._C_ICON if enabled else self._C_ICON_DIS
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(ic))
 
-        cx, cy = w // 2, h // 2
+        # Icon canvas: square inset 25% from each edge so icon never touches border
+        margin = max(4, w // 5)
+        ix = margin           # icon left
+        iy = margin           # icon top
+        iw = w - 2 * margin   # icon width
+        ih = h - 2 * margin   # icon height
+        icx = ix + iw // 2    # icon centre x
+        icy = iy + ih // 2    # icon centre y
 
         if self._icon == 'play':
-            # Solid right-pointing triangle, centred
-            size = min(w, h) // 3
+            # Right-pointing filled triangle filling the icon box
             pts = QPolygon([
-                QPoint(cx - size // 2,     cy - size),
-                QPoint(cx - size // 2,     cy + size),
-                QPoint(cx + size,          cy),
+                QPoint(ix,           iy),
+                QPoint(ix,           iy + ih),
+                QPoint(ix + iw,      icy),
             ])
             p.drawPolygon(pts)
 
         elif self._icon == 'pause':
-            # Two vertical bars
-            bw = max(2, w // 7)   # bar width
-            bh = min(h, h // 2)   # bar height
-            gap = max(2, w // 8)
-            total = 2 * bw + gap
-            lx = cx - total // 2
-            by = cy - bh // 2
-            p.fillRect(lx,          by, bw, bh, ic)
-            p.fillRect(lx + bw + gap, by, bw, bh, ic)
+            # Two filled vertical bars: each 35% of icon width, 30% gap
+            bar_w = max(2, iw * 35 // 100)
+            gap_w = iw - 2 * bar_w
+            p.fillRect(ix,                 iy, bar_w, ih, ic)
+            p.fillRect(ix + bar_w + gap_w, iy, bar_w, ih, ic)
 
         elif self._icon == 'camera':
-            # Camera body + lens circle
-            pen2 = QPen(ic, 1.5)
-            p.setPen(pen2)
-            p.setBrush(Qt.NoBrush)
-            bw2 = w * 5 // 8
-            bh2 = h * 4 // 9
-            bx = cx - bw2 // 2
-            by = cy - bh2 // 2 + 1
-            p.drawRect(bx, by, bw2, bh2)
-            # Viewfinder notch on top-left
-            nw = bw2 // 4
-            nh = max(2, bh2 // 4)
-            p.drawRect(bx + 3, by - nh, nw, nh)
-            # Lens
-            r = min(bw2, bh2) * 3 // 10
-            p.setBrush(QBrush(ic))
-            p.drawEllipse(QPoint(cx, cy + 1), r, r)
+            # Filled camera body rectangle
+            body_h = ih * 6 // 10
+            body_y = icy - body_h // 2 + ih // 10
+            p.fillRect(ix, body_y, iw, body_h, ic)
+            # Viewfinder notch: small rect on top-left of body
+            nw = iw * 3 // 10
+            nh = max(2, ih * 2 // 10)
+            p.fillRect(ix + iw // 10, body_y - nh, nw, nh, ic)
+            # Lens: background-coloured circle punched into body
+            r = min(iw, body_h) * 28 // 100
+            p.setBrush(QBrush(bg))
+            p.drawEllipse(QPoint(icx, body_y + body_h // 2), r, r)
 
         p.end()
 
