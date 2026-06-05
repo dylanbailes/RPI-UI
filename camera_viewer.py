@@ -37,10 +37,11 @@ QPushButton {
     color: #FFFFFF;
     border: 2px solid #000000;
     border-radius: 0px;
-    padding: 4px 8px;
+    padding: 0px 8px;
     font-weight: bold;
     letter-spacing: 1px;
     min-height: 24px;
+    max-height: 24px;
 }
 QPushButton:hover {
     background-color: #FF3000;
@@ -250,6 +251,8 @@ class CameraTile(QWidget):
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 0, 0, 0)
         footer.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         self.btn_start = QPushButton("START")
         self.btn_stop  = QPushButton("STOP")
@@ -409,8 +412,6 @@ class CameraSettingsPanel(QWidget):
         btn_apply = QPushButton("APPLY TO ALL")
         btn_apply.clicked.connect(self._emit_settings)
         inner.addWidget(btn_apply)
-
-        inner.addStretch()
 
         snap_group = QGroupBox("SNAPSHOTS")
         snap_layout = QVBoxLayout(snap_group)
