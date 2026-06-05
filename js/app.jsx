@@ -1,16 +1,20 @@
-/* ============================================================================
- * app.jsx — Shell: header, tab router, global E-STOP, toasts, Tweaks.
- * ========================================================================== */
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 
-// 1. IMPORT YOUR COMPONENTS FOR VITE
-// Adjust the file paths (e.g., './control.jsx') if your files are named differently.
-import ConnectionScreen from './connection.jsx'; 
-import { ControlTab, ModeDialog } from './control.jsx'; // If ModeDialog is in a different file, adjust this
-import WellTab from './well.jsx';
-import { ImagingTab } from './imaging.jsx';
+// 1. Import the files so they execute and attach components to the `window` object
+import './connection.jsx';
+import './control.jsx';
+import './well.jsx';
+import './imaging.jsx';
 
+// 2. Grab the components from the global window object
+const ConnectionScreen = window.ConnectionScreen;
+const ControlTab = window.ControlTab;
+const ModeDialog = window.ModeDialog;
+const WellTab = window.WellTab;
+const ImagingTab = window.ImagingTab;
+
+// ... (leave the rest of the file exactly as it is) ...
 // If you have a separate file for Tweaks, import them here. Otherwise, we use the fallbacks below.
 // import { TweaksPanel, TweakSection, TweakRadio, TweakToggle, TweakColor, useTweaks } from './tweaks.jsx';
 // import { useEngineTick } from './hooks.jsx'; 
