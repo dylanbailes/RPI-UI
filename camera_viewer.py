@@ -40,7 +40,7 @@ QPushButton {
     padding: 8px 16px;
     font-weight: bold;
     letter-spacing: 1px;
-    min-height: 48px;
+    min-height: 36px;
 }
 QPushButton:hover {
     background-color: #FF3000;
@@ -218,7 +218,7 @@ class CameraTile(QWidget):
 
         # header
         header = QLabel(f"  WELL {self._well_index + 1:02d}")
-        header.setFixedHeight(28)
+        header.setFixedHeight(20)
         header.setStyleSheet("background-color:#000000; color:#FFFFFF; font-weight:bold; letter-spacing:1px; font-size:11px;")
         layout.addWidget(header)
 
@@ -452,12 +452,12 @@ class CameraViewerWidget(QWidget):
 
         num_label = QLabel("  04.")
         num_label.setFixedWidth(56)
-        num_label.setFixedHeight(48)
+        num_label.setFixedHeight(32)
         num_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         num_label.setStyleSheet("background-color:#000000; color:#FF3000; font-weight:bold; font-size:14px; letter-spacing:2px; padding-left:8px;")
 
         title_label = QLabel("IMAGING")
-        title_label.setFixedHeight(48)
+        title_label.setFixedHeight(32)
         title_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         title_label.setStyleSheet("background-color:#000000; color:#FFFFFF; font-size:14px; font-weight:bold; letter-spacing:2px; padding-left:8px;")
@@ -465,7 +465,7 @@ class CameraViewerWidget(QWidget):
         btn_exit = QPushButton("✕  EXIT")
         btn_exit.setObjectName("exit_btn")
         btn_exit.setFixedWidth(120)
-        btn_exit.setFixedHeight(48)
+        btn_exit.setFixedHeight(32)
         btn_exit.clicked.connect(self._on_exit)
 
         hdr_row.addWidget(num_label)

@@ -141,13 +141,13 @@ QTabBar::tab {
     border: 2px solid #000000;
     border-bottom: none;
     border-radius: 0px;
-    padding: 14px 36px; 
+    padding: 8px 24px; 
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 1px;
     margin-right: 4px;
-    min-height: 52px;
-    min-width: 240px; 
+    min-height: 36px;
+    min-width: 180px; 
 }
 QTabBar::tab:selected {
     background-color: #000000;
@@ -714,7 +714,7 @@ class MCCB_UI(QWidget):
         header = QFrame()
         header.setStyleSheet("background-color: #FFFFFF; border-bottom: 4px solid #000000; border-top: none; border-left: none; border-right: none;")
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(32, 16, 32, 16)
+        header_layout.setContentsMargins(32, 8, 32, 8)
         
         title_lbl = QLabel("MCCB CONTROLLER")
         title_lbl.setFont(QFont("Inter", 20, QFont.Bold))
