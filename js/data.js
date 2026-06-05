@@ -298,6 +298,32 @@ class Engine {
 
   _command(obj) { sendToBackend(obj); }
 
+  // ---- Calibration --------------------------------------------------------
+  // Initiate a magnetic sweep on a single well. Marks the well as calibrating
+  // optimistically so the UI reflects it immediately; the backend confirms via
+  // cal_status / calibration messages handled in handleBackendMessage().
+  calibrateWell(wellNum) {
+    const w = this.wells[wellNum];
+    if (!w || !w.assigned || w.calibrating) return;
+    w.calibrating = true;
+    this._command({ cmd: 'calibrate', well: wellNum });
+    this._emit();
+  }
+
+  // Kick off calibration on every assigned well that isn't already running.
+  calibrateAll() {
+    let started = 0;
+    for (const w of Object.values(this.wells)) {
+      if (w.assigned && !w.calibrating) {
+        w.calibrating = true;
+        this._command({ cmd: 'calibrate', well: w.num });
+        started++;
+      }
+    }
+    if (started) this._emit();
+    return started;
+  }
+
   stopWell(wellNum) {
     const w = this.wells[wellNum];
     if (!w) return;
@@ -313,6 +339,7 @@ class Engine {
 
   get assignedWells() { return Object.values(this.wells).filter((w) => w.assigned).map((w) => w.num); }
   get anyActive() { return Object.values(this.wells).some((w) => w.assigned && (w.setEfield > 0 || w.setGauss > 0)); }
+  get anyCalibrating() { return Object.values(this.wells).some((w) => w.assigned && w.calibrating); }
 }
 
 function enumeratePorts() { if (wsConnected) sendToBackend({ cmd: 'enumerate_ports' }); return cachedPorts; }

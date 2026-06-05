@@ -5,6 +5,41 @@ Layout + chart styling are driven by Tweaks.
 ========================================================================== */
 import React from 'react';
 
+// ---- Local calibration status pill (mirrors control.jsx look) -------------
+function CalStatusPill({ well, big }) {
+  // window.calState is defined in control.jsx; fall back gracefully if absent.
+  const c = (window.calState ? window.calState(well) :
+    well.calibrating ? { key: 'cal', fg: '#000', bg: '#FFE9B0', dot: '#C98A00', label: 'Calibrating…' }
+    : well.calibrated ? { key: 'done', fg: '#0A6B2E', bg: '#D8F3DF', dot: '#16A34A', label: 'Calibrated' }
+    : { key: 'todo', fg: '#fff', bg: 'var(--accent)', dot: '#fff', label: 'Not Calibrated' });
+  return (
+    <span className="status-pill" style={{ color: c.fg, background: c.bg, fontSize: big ? 11 : 10, padding: big ? '4px 10px' : '3px 8px' }}>
+      <span className={'status-dot' + (c.key === 'cal' ? ' pulse' : '')} style={{ background: c.dot }}></span>{c.label}
+    </span>
+  );
+}
+
+// ---- Sidebar calibration block (persists across all sub-views) ------------
+function SidebarCalibration({ well }) {
+  return (
+    <div style={{ padding: 14, borderTop: '2px solid #000' }}>
+      <div className="kicker" style={{ marginBottom: 8 }}>Magnetic Calibration</div>
+      <div style={{ marginBottom: 10 }}><CalStatusPill well={well} /></div>
+      <button
+        className="btn btn-secondary btn-sm btn-block"
+        style={{
+          minHeight: 42,
+          background: well.calibrating ? 'var(--dim)' : (!well.calibrated ? 'var(--accent)' : ''),
+          color: (well.calibrating || !well.calibrated) ? '#fff' : '',
+        }}
+        disabled={well.calibrating}
+        onClick={() => window.MCCB.engine.calibrateWell(well.num)}>
+        {well.calibrating ? 'Calibrating…' : (well.calibrated ? 'Recalibrate' : 'Calibrate Now')}
+      </button>
+    </div>
+  );
+}
+
 // ---- Single readout cell --------------------------------------------------
 function Readout({ label, value, decimals = 2, unit, accent }) {
   return (
@@ -125,9 +160,10 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
         <div className="row gap-12" style={{ alignItems: 'center' }}>
           <h2 style={{ margin: 0, fontSize: 19, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1 }}>{title}</h2>
           <StatusPill status={status} big />
+          {metric === 'magnetic' && <CalStatusPill well={well} big />}
         </div>
         <div className="row gap-8">
-          {/* NEW: Calibration Button (Only shows for Magnetic view) */}
+          {/* Calibration button (Magnetic view only) — routed through engine */}
           {metric === 'magnetic' && (
             <button 
               className="btn btn-secondary btn-sm" 
@@ -137,12 +173,12 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
                 color: (well.calibrating || needsCalibration) ? '#fff' : '' 
               }}
               disabled={well.calibrating}
-              onClick={() => window.MCCB.sendToBackend({ cmd: 'calibrate', well: well.num })}>
-              {well.calibrating ? 'Calibrating...' : 'Calibrate Mag'}
+              onClick={() => window.MCCB.engine.calibrateWell(well.num)}>
+              {well.calibrating ? 'Calibrating…' : (well.calibrated ? 'Recalibrate' : 'Calibrate Mag')}
             </button>
           )}
           
-          {/* UPDATED: Set Value button is disabled if magnetic calibration is missing */}
+          {/* Set Value button is disabled if magnetic calibration is missing */}
           <button 
             className="btn btn-secondary btn-sm" 
             style={{ minWidth: 150 }} 
@@ -206,12 +242,13 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
   const mAcc = { series: () => well.history.gauss1.values, setpoint: () => well.setGauss, latest: () => well.measGauss1, max: window.MCCB.MAX_MAG };
   const side = layout === 'split';
   
-  const block = (title, acc, status, setVal, measVal, unit, mode, rmsVal) => (
+  const block = (title, acc, status, setVal, measVal, unit, mode, rmsVal, isMag) => (
     <div className="col grow" style={{ minHeight: 0, gap: 10 }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
         <div className="row gap-12" style={{ alignItems: 'center' }}>
           <span style={{ fontWeight: 800, fontSize: 14, textTransform: 'uppercase', letterSpacing: 1 }}>{title}</span>
           <StatusPill status={status} />
+          {isMag && <CalStatusPill well={well} />}
         </div>
         <div className="row gap-16" style={{ alignItems: 'baseline' }}>
           <span className="kicker">SET <span className="mono" style={{ color: '#000', fontSize: 14 }}>{setVal.toFixed(2)}</span></span>
@@ -223,7 +260,12 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
               RMS: <span className="mono" style={{ color: 'var(--ink)', fontSize: 14 }}>{rmsVal.toFixed(2)}</span>
             </span>
           )}
-          <button className="btn btn-secondary btn-sm" style={{ minHeight: 38, minWidth: 96 }} onClick={() => onConfigure(well.num, mode)}>Set</button>
+          {isMag && !well.calibrated
+            ? <button className="btn btn-secondary btn-sm" style={{ minHeight: 38, minWidth: 96, background: 'var(--accent)', color: '#fff' }}
+                disabled={well.calibrating} onClick={() => window.MCCB.engine.calibrateWell(well.num)}>
+                {well.calibrating ? '…' : 'Calibrate'}
+              </button>
+            : <button className="btn btn-secondary btn-sm" style={{ minHeight: 38, minWidth: 96 }} onClick={() => onConfigure(well.num, mode)}>Set</button>}
         </div>
       </div>
       <ChartCard title={title + ' — Measured vs Setpoint'} well={well} accessor={acc} accent={accent} variant={variant} grid={grid} />
@@ -241,8 +283,8 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
       </div>
       <div className={side ? 'row grow gap-14' : 'col grow gap-14'} style={{ minHeight: 0 }}>
         {block('Electric', eAcc, well.electricStatus, well.setEfield, well.measEfield, 'V/cm', 'electric')}
-        {/* UPDATED: Pass well.measGauss1 and well.rms1 to the magnetic block */}
-        {block('Magnetic', mAcc, well.magneticStatus, well.setGauss, well.measGauss1, 'G', 'magnetic', well.rms1)}
+        {/* Pass well.measGauss1 and well.rms1 to the magnetic block */}
+        {block('Magnetic', mAcc, well.magneticStatus, well.setGauss, well.measGauss1, 'G', 'magnetic', well.rms1, true)}
       </div>
     </div>
   );
@@ -250,6 +292,7 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
 
 // ---- Well container with sub-nav ------------------------------------------
 function WellTab({ wellNum, layout, variant, grid, accent, onConfigure }) {
+  useEngineTick(6); // keep sidebar calibration status fresh across all sub-views
   const well = window.MCCB.engine.wells[wellNum];
   const [view, setView] = React.useState('COMBINED');
   
@@ -283,6 +326,8 @@ function WellTab({ wellNum, layout, variant, grid, accent, onConfigure }) {
           </button>
         ))}
         <div className="grow"></div>
+        {/* Per-well magnetic calibration — available from any sub-view */}
+        <SidebarCalibration well={well} />
         <div style={{ padding: 14, borderTop: '2px solid #000' }}>
           <div className="kicker" style={{ marginBottom: 6 }}>Port</div>
           <div className="mono" style={{ fontSize: 12, wordBreak: 'break-all' }}>{well.port}</div>

@@ -1,6 +1,6 @@
 /* ============================================================================
  * control.jsx — CONTROL tab (mode select + live overview), Mode dialog,
- * and the docked touch numpad for parameter entry.
+ * the docked touch numpad, and the global calibration panel.
  * ========================================================================== */
 import React from 'react';
 
@@ -82,6 +82,7 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
       if (showM && vals[n].magnetic !== '') {
         const v = parseFloat(vals[n].magnetic);
         if (isNaN(v) || v < 0 || v > MAX_MAG) errors.push(`Well ${n} magnetic out of range (0–${MAX_MAG}).`);
+        else if (!eng.wells[n].calibrated) errors.push(`Well ${n} requires magnetic calibration first.`);
         else { eng.setParams(n, { gauss: v }); summary.push(`W${n} M ${v} G`); }
       }
     });
@@ -115,9 +116,9 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
                         onArm={setArmed} />
                     )}
                     {showM && (
-                      <FieldRow label="Magnetic (Gauss)" placeholder={`0 – ${MAX_MAG}`}
+                      <FieldRow label="Magnetic (Gauss)" placeholder={eng.wells[n].calibrated ? `0 – ${MAX_MAG}` : 'Calibrate well first'}
                         k={`${n}-magnetic`} value={vals[n].magnetic} armed={armed} bad={rangeBad(`${n}-magnetic`)}
-                        onArm={setArmed} />
+                        disabled={!eng.wells[n].calibrated} onArm={setArmed} />
                     )}
                   </div>
                 </div>
@@ -145,15 +146,82 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
   );
 }
 
-function FieldRow({ label, placeholder, k, value, armed, bad, onArm }) {
+function FieldRow({ label, placeholder, k, value, armed, bad, disabled, onArm }) {
   const active = armed === k;
   return (
-    <div className="col" style={{ gap: 6 }}>
+    <div className="col" style={{ gap: 6, opacity: disabled ? .5 : 1 }}>
       <span style={{ fontWeight: 700, fontSize: 12, letterSpacing: 1, textTransform: 'uppercase' }}>{label}</span>
       <div className={'field tappable' + (active ? ' active' : '') + (bad ? ' invalid' : '')}
-        onClick={() => onArm(k)} style={{ fontSize: 20 }}>
+        onClick={() => !disabled && onArm(k)} style={{ fontSize: 20, cursor: disabled ? 'not-allowed' : 'pointer' }}>
         {value !== '' ? value : <span style={{ color: 'var(--disabled)', fontFamily: 'var(--sans)', fontSize: 13 }}>{placeholder}</span>}
       </div>
+    </div>
+  );
+}
+
+// ---- Calibration status pill (shared look) --------------------------------
+function calState(well) {
+  if (well.calibrating) return { key: 'cal',  fg: '#000',     bg: '#FFE9B0',      dot: '#C98A00', label: 'Calibrating…' };
+  if (well.calibrated)  return { key: 'done', fg: '#0A6B2E',  bg: '#D8F3DF',      dot: '#16A34A', label: 'Calibrated' };
+  return                       { key: 'todo', fg: '#FFFFFF',  bg: 'var(--accent)', dot: '#FFFFFF', label: 'Not Calibrated' };
+}
+function CalPill({ well, big }) {
+  const c = calState(well);
+  return (
+    <span className="status-pill" style={{ color: c.fg, background: c.bg, fontSize: big ? 11 : 10, padding: big ? '4px 10px' : '3px 8px' }}>
+      <span className={'status-dot' + (c.key === 'cal' ? ' pulse' : '')} style={{ background: c.dot }}></span>{c.label}
+    </span>
+  );
+}
+
+// ---- Global calibration panel (Control tab) -------------------------------
+function CalibrationPanel({ accent }) {
+  const eng = window.MCCB.engine;
+  const wells = eng.assignedWells;
+  const anyCalibrating = eng.anyCalibrating;
+  const allDone = wells.length > 0 && wells.every((n) => eng.wells[n].calibrated);
+
+  return (
+    <div className="gb" style={{ marginTop: 26 }}>
+      <div className="gb-title">Magnetic Calibration</div>
+      <div className="gb-body">
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 16 }}>
+          <p style={{ color: 'var(--dim)', fontSize: 12, lineHeight: 1.5, margin: 0, maxWidth: 540 }}>
+            Each well runs a magnetic sweep to build its PWM→Gauss lookup table from the on-board Hall sensors.
+            Gauss setpoints stay locked until the well reports a completed calibration.
+          </p>
+          <button className="btn btn-sm" style={{ minWidth: 200 }}
+            disabled={wells.length === 0 || anyCalibrating}
+            onClick={() => eng.calibrateAll()}>
+            {anyCalibrating ? 'Calibrating…' : allDone ? 'Recalibrate All Wells' : 'Calibrate All Wells'}
+          </button>
+        </div>
+
+        {wells.length === 0
+          ? <div style={{ color: 'var(--dim)', padding: '6px 2px' }}>No wells connected.</div>
+          : (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {wells.map((n) => <CalibrationRow key={n} well={eng.wells[n]} eng={eng} />)}
+            </div>
+          )}
+      </div>
+    </div>
+  );
+}
+
+function CalibrationRow({ well, eng }) {
+  return (
+    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', border: '2px solid #000', padding: '10px 12px' }}>
+      <div className="col" style={{ gap: 7 }}>
+        <span style={{ fontWeight: 800, letterSpacing: 2, fontSize: 13 }}>WELL {well.num}</span>
+        <CalPill well={well} />
+      </div>
+      <button className="btn btn-secondary btn-sm"
+        style={{ minWidth: 130, minHeight: 42, background: well.calibrating ? 'var(--dim)' : '', color: well.calibrating ? '#fff' : '' }}
+        disabled={well.calibrating}
+        onClick={() => eng.calibrateWell(well.num)}>
+        {well.calibrating ? 'Calibrating…' : (well.calibrated ? 'Recalibrate' : 'Calibrate')}
+      </button>
     </div>
   );
 }
@@ -189,6 +257,9 @@ function ControlTab({ accent, onMode, onConfigure }) {
             ))}
           </div>
         </div>
+
+        {/* Global magnetic calibration */}
+        <CalibrationPanel accent={accent} />
 
         <div className="gb" style={{ marginTop: 26 }}>
           <div className="gb-title">Active Stimulation · {wells.length} Well{wells.length === 1 ? '' : 's'}</div>
@@ -248,4 +319,5 @@ function ModeGlyph({ mode }) {
   return <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}><span style={{ width: 4, height: 20, background: 'currentColor' }}></span><span style={{ width: 18, height: 18, border: '4px solid currentColor', borderRadius: '50%', borderRightColor: 'transparent' }}></span></div>;
 }
 
-Object.assign(window, { ControlTab, ModeDialog });
+// expose the calibration pill + state helper so well.jsx can reuse the look
+Object.assign(window, { ControlTab, ModeDialog, CalPill, calState });
