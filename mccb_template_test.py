@@ -196,10 +196,6 @@ BAUDRATE   = 115200
 # =============================================
 def show_message(parent, title, text, icon=QMessageBox.Warning, 
                  buttons=QMessageBox.Ok, auto_close_ms=0):
-    """
-    Show a message box with proper window flags for RPi/Wayland compatibility.
-    If auto_close_ms > 0, the dialog auto-closes after that duration.
-    """
     msg = QMessageBox(parent)
     msg.setWindowFlags(Qt.Dialog | Qt.WindowStaysOnTopHint)
     msg.setIcon(icon)
@@ -453,14 +449,14 @@ class NumpadLineEdit(QLineEdit):
         super().mousePressEvent(event)
 
 # =============================================
-# Continuous sensor log widget
+# Continuous sensor log widget per well
 # =============================================
-class SensorLogWidget(QWidget):
-    def __init__(self, device_label, parent=None):
+class WellLogWidget(QWidget):
+    def __init__(self, well_number, parent=None):
         super().__init__(parent)
-        self.device_label = device_label
-        self.latest       = {}
-        self._paused      = False
+        self.well_number = well_number
+        self.latest      = {"electric": {}, "magnetic": {}}
+        self._paused     = False
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -471,7 +467,7 @@ class SensorLogWidget(QWidget):
         hdr = QHBoxLayout(hdr_frame)
         hdr.setContentsMargins(16, 12, 16, 12)
         
-        lbl = QLabel(f"LIVE FEED // {device_label.upper()}")
+        lbl = QLabel(f"WELL {well_number} // LIVE FEED")
         lbl.setFont(QFont("Inter", 12, QFont.Bold))
         lbl.setStyleSheet("letter-spacing: 2px;")
         hdr.addWidget(lbl)
@@ -514,11 +510,11 @@ class SensorLogWidget(QWidget):
             cursor.removeSelectedText()
             cursor.deleteChar()
 
-        if obj and 'well' in obj:
-            try:
-                self.latest[int(obj['well'])] = obj
-            except (ValueError, TypeError):
-                pass
+        if obj:
+            if 'voltage' in obj:
+                self.latest["electric"] = obj
+            elif 'gauss' in obj:
+                self.latest["magnetic"] = obj
 
     def _toggle_pause(self, checked):
         self._paused = checked
@@ -526,10 +522,10 @@ class SensorLogWidget(QWidget):
 
     def _clear(self):
         self.log.clear()
-        self.latest = {}
+        self.latest = {"electric": {}, "magnetic": {}}
 
 # =============================================
-# Device connection panel (Page 0)
+# Device connection panel for 4 wells
 # =============================================
 class DeviceConnectPanel(QWidget):
     connected = pyqtSignal(dict)
@@ -553,7 +549,7 @@ class DeviceConnectPanel(QWidget):
         sec_num.setProperty("role", "section-number")
         layout.addWidget(sec_num)
 
-        title = QLabel("ASSIGN SERIAL DEVICES")
+        title = QLabel("ASSIGN SERIAL DEVICES TO WELLS")
         title.setProperty("role", "heading")
         layout.addWidget(title)
 
@@ -573,20 +569,18 @@ class DeviceConnectPanel(QWidget):
 
         form_label_style = "font-weight: 700; text-transform: uppercase; letter-spacing: 1px; font-size: 14px;"
 
-        self.combo_electrode = QComboBox()
-        self.combo_electrode.addItems(port_options)
-        form.addRow("<span style='" + form_label_style + "'>Electrode ESP32:</span>", self.combo_electrode)
-
-        self.combo_magnet = QComboBox()
-        self.combo_magnet.addItems(port_options)
-        form.addRow("<span style='" + form_label_style + "'>Electromagnet ESP32:</span>", self.combo_magnet)
+        self.well_combos = []
+        for i in range(1, 5):
+            combo = QComboBox()
+            combo.addItems(port_options)
+            self.well_combos.append(combo)
+            form.addRow(f"<span style='{form_label_style}'>WELL {i}:</span>", combo)
 
         form_layout.addLayout(form)
         layout.addWidget(form_container)
 
-        # Add note about single/dual device support
         note = QLabel(
-            "Select the same port for both if using a single ESP32 for electric and magnetic control.\n"
+            "Each well should have its own ESP32 device.\n"
             "ESP32s typically appear as CP210x or CH340."
         )
         note.setWordWrap(True)
@@ -630,7 +624,7 @@ class DeviceConnectPanel(QWidget):
     def _refresh(self):
         self.devices = detect_serial_devices()
         port_options = ["(NONE)"] + list(self.devices.values())
-        for combo in (self.combo_electrode, self.combo_magnet):
+        for combo in self.well_combos:
             current = combo.currentText()
             combo.clear()
             combo.addItems(port_options)
@@ -639,16 +633,12 @@ class DeviceConnectPanel(QWidget):
                 combo.setCurrentIndex(idx)
 
     def _on_connect(self):
-        e_port = self.combo_electrode.currentText()
-        m_port = self.combo_magnet.currentText()
-        
-        # Allow same port for both - single device operation
         result = {}
-        if e_port != "(NONE)":
-            result["electrode"] = e_port
-        if m_port != "(NONE)":
-            result["magnet"] = m_port
-            
+        for i, combo in enumerate(self.well_combos, start=1):
+            port = combo.currentText()
+            if port != "(NONE)":
+                result[f"well_{i}"] = port
+                
         if not result:
             show_message(self, "NO DEVICE", 
                 "Please select at least one device.",
@@ -689,37 +679,21 @@ class MCCB_UI(QWidget):
         self.serial_threads.clear()
         self.log_widgets.clear()
 
-        # Deduplicate ports - if both roles use same port, create one thread
-        unique_ports = {}
-        for role, port in port_map.items():
-            if port not in unique_ports:
-                unique_ports[port] = []
-            unique_ports[port].append(role)
-
-        # Create threads for each unique port
-        port_to_thread = {}
-        for port, roles in unique_ports.items():
-            # Use first role as primary label, or "COMBINED" if multiple
-            if len(roles) == 1:
-                label = roles[0]
-            else:
-                label = "COMBINED"
+        # Create threads for each well
+        for well_key, port in port_map.items():
+            well_num = int(well_key.split('_')[1])
+            thread = SerialThread(port, BAUDRATE, device_label=f"Well {well_num}")
+            log_w  = WellLogWidget(well_num)
             
-            thread = SerialThread(port, BAUDRATE, device_label=label)
-            log_w  = SensorLogWidget(label)
-            
-            thread.received.connect(lambda obj, l=label: self._on_json(l, obj))
-            thread.raw_line.connect(lambda line, l=label: self.log_widgets[l].append(line))
+            # Fix the lambda capture issue by using default argument
+            thread.received.connect(lambda obj, w=well_num: self._on_json(w, obj))
+            thread.raw_line.connect(lambda line, w=well_num: self.log_widgets[w].append(line))
             thread.error.connect(self.on_serial_error)
-            thread.connection_lost.connect(lambda l=label: self._on_conn_lost(l))
+            thread.connection_lost.connect(lambda w=well_num: self._on_conn_lost(w))
             
             thread.start()
-            port_to_thread[port] = thread
-            self.log_widgets[label] = log_w
-
-        # Map each role to its thread
-        for role, port in port_map.items():
-            self.serial_threads[role] = port_to_thread[port]
+            self.serial_threads[well_key] = thread
+            self.log_widgets[well_num] = log_w
 
         self._build_main_ui()
         self.stack.setCurrentIndex(1)
@@ -800,8 +774,32 @@ class MCCB_UI(QWidget):
         ctrl.setLayout(ctrl_layout)
         tabs.addTab(ctrl, "CONTROL")
 
-        for label, log_w in self.log_widgets.items():
-            tabs.addTab(log_w, f"SENSORS // {label.upper()}")
+        # Add tabs for each well with sub-tabs
+        for well_num in sorted(self.log_widgets.keys()):
+            well_tab = QWidget()
+            well_layout = QVBoxLayout(well_tab)
+            
+            well_tabs = QTabWidget()
+            well_tabs.setDocumentMode(True)
+            
+            # Combined view (default)
+            combined_log = self.log_widgets[well_num]
+            well_tabs.addTab(combined_log, "COMBINED")
+            
+            # Electric-only view
+            electric_log = WellLogWidget(well_num)
+            well_tabs.addTab(electric_log, "ELECTRIC")
+            
+            # Magnetic-only view  
+            magnetic_log = WellLogWidget(well_num)
+            well_tabs.addTab(magnetic_log, "MAGNETIC")
+            
+            well_layout.addWidget(well_tabs)
+            tabs.addTab(well_tab, f"WELL {well_num}")
+            
+            # Store references for routing
+            self.log_widgets[f"{well_num}_electric"] = electric_log
+            self.log_widgets[f"{well_num}_magnetic"] = magnetic_log
 
         layout.addWidget(tabs, 1)
         main.setLayout(layout)
@@ -826,16 +824,23 @@ class MCCB_UI(QWidget):
         dlg = ModeDialog(mode, self.serial_threads, self.log_widgets, self)
         dlg.exec_()
 
-    def _on_json(self, label, obj):
-        if 'well' in obj:
-            try:
-                self.log_widgets[label].latest[int(obj['well'])] = obj
-            except (ValueError, TypeError):
-                pass
+    def _on_json(self, well_num, obj):
+        """Route JSON data to appropriate log widgets based on content"""
+        if 'well' in obj and obj['well'] == well_num:
+            # Send to combined log
+            if well_num in self.log_widgets:
+                self.log_widgets[well_num].latest = obj
+                # We don't directly update the display here, raw_line handles that
+            
+            # Also route to specific views if they exist
+            if 'voltage' in obj and f"{well_num}_electric" in self.log_widgets:
+                self.log_widgets[f"{well_num}_electric"].latest["electric"] = obj
+            if 'gauss' in obj and f"{well_num}_magnetic" in self.log_widgets:
+                self.log_widgets[f"{well_num}_magnetic"].latest["magnetic"] = obj
 
-    def _on_conn_lost(self, label):
+    def _on_conn_lost(self, well_num):
         show_message(self, "CONNECTION LOST",
-                     f"Serial connection to '{label.upper()}' was lost.",
+                     f"Serial connection to WELL {well_num} was lost.",
                      QMessageBox.Critical)
 
     def on_serial_error(self, msg):
@@ -850,7 +855,7 @@ class MCCB_UI(QWidget):
         e.accept()
 
 # =============================================
-# Mode dialog - Fixed for RPi 5 positioning & popups
+# Mode dialog - Updated for well-based architecture
 # =============================================
 class ModeDialog(QDialog):
     def __init__(self, mode, serial_threads, log_widgets, parent=None):
@@ -890,8 +895,16 @@ class ModeDialog(QDialog):
         wells_grid.setSpacing(16)
         self.inputs = []
 
-        for i in range(1, 5):
-            gb = QGroupBox(f"WELL {i}")
+        # Get available wells from serial_threads keys
+        available_wells = []
+        for key in self.serial_threads.keys():
+            if key.startswith('well_'):
+                well_num = int(key.split('_')[1])
+                available_wells.append(well_num)
+        available_wells.sort()
+
+        for well_num in available_wells:
+            gb = QGroupBox(f"WELL {well_num}")
             form = QFormLayout()
             form.setContentsMargins(0, 4, 0, 4)
             form.setLabelAlignment(Qt.AlignLeft)
@@ -903,14 +916,14 @@ class ModeDialog(QDialog):
             m_input = None
 
             if mode in ("electric", "dual"):
-                e_input = NumpadLineEdit(f"Well {i} Electric", min_val=0.0, max_val=MAX_EFIELD)
+                e_input = NumpadLineEdit(f"Well {well_num} Electric", min_val=0.0, max_val=MAX_EFIELD)
                 e_input.setPlaceholderText(f"0 – {MAX_EFIELD} V/CM")
                 e_input.setFixedHeight(44)
                 e_input.activated.connect(self._on_input_activated)
                 form.addRow("<span style='font-weight:700; font-size:13px;'>ELECTRIC (V/CM):</span>", e_input)
 
             if mode in ("magnetic", "dual"):
-                m_input = NumpadLineEdit(f"Well {i} Magnetic", min_val=0.0, max_val=MAX_MAG)
+                m_input = NumpadLineEdit(f"Well {well_num} Magnetic", min_val=0.0, max_val=MAX_MAG)
                 m_input.setPlaceholderText(f"0 – {MAX_MAG} GAUSS")
                 m_input.setFixedHeight(44)
                 m_input.activated.connect(self._on_input_activated)
@@ -918,11 +931,11 @@ class ModeDialog(QDialog):
 
             gb.setLayout(form)
             
-            row = (i - 1) // 2
-            col = (i - 1) % 2
+            row = (well_num - 1) // 2
+            col = (well_num - 1) % 2
             wells_grid.addWidget(gb, row, col)
             
-            self.inputs.append({"electric": e_input, "magnetic": m_input})
+            self.inputs.append({"well": well_num, "electric": e_input, "magnetic": m_input})
 
         left_layout.addLayout(wells_grid)
 
@@ -995,19 +1008,23 @@ class ModeDialog(QDialog):
         commands = []
         summary  = []
 
-        for i, ent in enumerate(self.inputs, start=1):
+        for ent in self.inputs:
+            well_num = ent["well"]
+            well_key = f"well_{well_num}"
+            
             if ent["electric"] is not None:
                 txt = ent["electric"].text().strip()
                 if txt:
                     try:
                         v = float(txt)
                         if not (0.0 <= v <= MAX_EFIELD):
-                            errors.append(f"WELL {i} E-FIELD OUT OF RANGE (0 - {MAX_EFIELD}).")
+                            errors.append(f"WELL {well_num} E-FIELD OUT OF RANGE (0 - {MAX_EFIELD}).")
                         else:
-                            commands.append(("electrode", {"cmd": "set", "well": i, "voltage": v}))
-                            summary.append(f"Well {i} Electric: {v} V/cm")
+                            cmd_obj = {"cmd": "set", "well": well_num, "voltage": v}
+                            commands.append((well_key, cmd_obj))
+                            summary.append(f"Well {well_num} Electric: {v} V/cm")
                     except ValueError:
-                        errors.append(f"WELL {i} E-FIELD: INVALID NUMBER.")
+                        errors.append(f"WELL {well_num} E-FIELD: INVALID NUMBER.")
 
             if ent["magnetic"] is not None:
                 txt = ent["magnetic"].text().strip()
@@ -1015,24 +1032,25 @@ class ModeDialog(QDialog):
                     try:
                         v = float(txt)
                         if not (0.0 <= v <= MAX_MAG):
-                            errors.append(f"WELL {i} MAGNETIC OUT OF RANGE (0 - {MAX_MAG}).")
+                            errors.append(f"WELL {well_num} MAGNETIC OUT OF RANGE (0 - {MAX_MAG}).")
                         else:
-                            commands.append(("magnet", {"cmd": "set", "well": i, "gauss": v}))
-                            summary.append(f"Well {i} Magnetic: {v} Gauss")
+                            cmd_obj = {"cmd": "set", "well": well_num, "gauss": v}
+                            commands.append((well_key, cmd_obj))
+                            summary.append(f"Well {well_num} Magnetic: {v} Gauss")
                     except ValueError:
-                        errors.append(f"WELL {i} MAGNETIC: INVALID NUMBER.")
+                        errors.append(f"WELL {well_num} MAGNETIC: INVALID NUMBER.")
 
         if errors:
             show_message(self, "VALIDATION ERROR", "\n".join(errors), QMessageBox.Warning)
             self._reset_apply_button()
             return
 
-        for role, cmd in commands:
-            if role in self.serial_threads:
-                self.serial_threads[role].send(cmd)
+        for well_key, cmd in commands:
+            if well_key in self.serial_threads:
+                self.serial_threads[well_key].send(cmd)
             else:
                 show_message(self, "DEVICE NOT CONNECTED",
-                             f"NO '{role.upper()}' DEVICE IS CONNECTED.",
+                             f"WELL {well_key.split('_')[1]} IS NOT CONNECTED.",
                              QMessageBox.Warning)
                 self._reset_apply_button()
                 return
@@ -1040,7 +1058,7 @@ class ModeDialog(QDialog):
         msg_text = f"✓ {len(commands)} COMMAND(S) TRANSMITTED.\n\n"
         if summary:
             msg_text += "VALUES SENT:\n" + "\n".join(summary) + "\n\n"
-        msg_text += "Check the sensor tab for live readings."
+        msg_text += "Check the sensor tabs for live readings."
 
         show_message(self, "SETTINGS APPLIED", msg_text, 
                      QMessageBox.Information, auto_close_ms=2000)
