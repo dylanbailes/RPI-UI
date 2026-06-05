@@ -37,10 +37,10 @@ QPushButton {
     color: #FFFFFF;
     border: 2px solid #000000;
     border-radius: 0px;
-    padding: 8px 16px;
+    padding: 4px 8px;
     font-weight: bold;
     letter-spacing: 1px;
-    min-height: 36px;
+    min-height: 24px;
 }
 QPushButton:hover {
     background-color: #FF3000;
@@ -218,7 +218,7 @@ class CameraTile(QWidget):
 
         # header
         header = QLabel(f"  WELL {self._well_index + 1:02d}")
-        header.setFixedHeight(20)
+        header.setFixedHeight(18)
         header.setStyleSheet("background-color:#000000; color:#FFFFFF; font-weight:bold; letter-spacing:1px; font-size:11px;")
         layout.addWidget(header)
 
@@ -445,34 +445,6 @@ class CameraViewerWidget(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # header row
-        hdr_row = QHBoxLayout()
-        hdr_row.setContentsMargins(0, 0, 0, 0)
-        hdr_row.setSpacing(0)
-
-        num_label = QLabel("  04.")
-        num_label.setFixedWidth(56)
-        num_label.setFixedHeight(32)
-        num_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        num_label.setStyleSheet("background-color:#000000; color:#FF3000; font-weight:bold; font-size:14px; letter-spacing:2px; padding-left:8px;")
-
-        title_label = QLabel("IMAGING")
-        title_label.setFixedHeight(32)
-        title_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        title_label.setStyleSheet("background-color:#000000; color:#FFFFFF; font-size:14px; font-weight:bold; letter-spacing:2px; padding-left:8px;")
-
-        btn_exit = QPushButton("✕  EXIT")
-        btn_exit.setObjectName("exit_btn")
-        btn_exit.setFixedWidth(120)
-        btn_exit.setFixedHeight(32)
-        btn_exit.clicked.connect(self._on_exit)
-
-        hdr_row.addWidget(num_label)
-        hdr_row.addWidget(title_label)
-        hdr_row.addWidget(btn_exit)
-        root.addLayout(hdr_row)
-
         # body
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
@@ -496,15 +468,7 @@ class CameraViewerWidget(QWidget):
         grid_container = QWidget()
         grid_container.setLayout(grid)
         grid_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        grid_container.setMinimumHeight(740)  # 2 rows × ~370px each
-
-        scroll = QScrollArea()
-        scroll.setWidget(grid_container)
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-        scroll.setStyleSheet("QScrollArea { border: none; background-color: #FFFFFF; }")
-        body.addWidget(scroll, stretch=1)
+        body.addWidget(grid_container, stretch=1)
 
         self.settings_panel = CameraSettingsPanel()
         self.settings_panel.settings_changed.connect(self._apply_settings)
