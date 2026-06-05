@@ -109,6 +109,7 @@ QPushButton:disabled {
 QPushButton[variant="secondary"] {
     background-color: #FFFFFF;
     color: #000000;
+    border: 2px solid #000000;
 }
 QPushButton[variant="secondary"]:hover {
     background-color: #000000;
@@ -148,13 +149,13 @@ QTabBar::tab {
     border: 2px solid #000000;
     border-bottom: none;
     border-radius: 0px;
-    padding: 14px 36px; 
+    padding: 10px 16px; 
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 1px;
-    margin-right: 4px;
-    min-height: 52px;
-    min-width: 240px; 
+    margin-right: 2px;
+    min-height: 44px;
+    min-width: 140px; 
 }
 QTabBar::tab:selected {
     background-color: #000000;
@@ -679,10 +680,6 @@ class DeviceConnectPanel(QWidget):
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        
         content_widget = QWidget()
         layout = QVBoxLayout(content_widget)
         layout.setContentsMargins(40, 40, 40, 40)
@@ -759,8 +756,7 @@ class DeviceConnectPanel(QWidget):
         
         layout.addLayout(bottom_row)
 
-        scroll.setWidget(content_widget)
-        main_layout.addWidget(scroll)
+        main_layout.addWidget(content_widget)
         self.setLayout(main_layout)
 
     def _refresh(self):
@@ -886,6 +882,20 @@ class MCCB_UI(QWidget):
         reconfig_btn = QPushButton("RECONFIGURE PORTS")
         reconfig_btn.setProperty("variant", "secondary")
         reconfig_btn.setFixedHeight(48)
+        reconfig_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FFFFFF;
+                color: #000000;
+                border: 3px solid #000000;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }
+            QPushButton:hover {
+                background-color: #000000;
+                color: #FFFFFF;
+            }
+        """)
         reconfig_btn.clicked.connect(self._reconfigure_ports)
         header_layout.addWidget(reconfig_btn)
         
@@ -921,7 +931,7 @@ class MCCB_UI(QWidget):
         mb = QVBoxLayout()
         mb.setSpacing(16)
         for label, mode in [
-            ("ELECTRIC CURRENT",          "electric"),
+            ("ELECTRIC FIELD",            "electric"),
             ("MAGNETIC FIELD",            "magnetic"),
             ("DUAL: ELECTRIC + MAGNETIC", "dual"),
         ]:
@@ -1133,7 +1143,7 @@ class ModeDialog(QDialog):
 
     def _mode_label(self):
         return {
-            "electric": "Electric Current",
+            "electric": "Electric Field",
             "magnetic": "Magnetic Field",
             "dual":     "Dual: Electric + Magnetic",
         }[self.mode]
@@ -1233,7 +1243,7 @@ if __name__ == "__main__":
     window = MCCB_UI()
     
     print("--- 5. SHOWING WINDOW ---")
-    window.showMaximized()
+    window.showFullScreen()
     
     print("--- 6. STARTING EVENT LOOP ---")
     sys.exit(app.exec_())
