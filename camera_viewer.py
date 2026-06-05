@@ -18,11 +18,11 @@ from PyQt5.QtWidgets import (
     QHBoxLayout, QGridLayout, QComboBox, QGroupBox, QSizePolicy,
     QFileDialog
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QMutex, QMutexLocker, QRect
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QMutex, QMutexLocker
 from PyQt5.QtGui import QImage, QPixmap, QPainter
 
 # ---------------------------------------------------------------------------
-# Swiss International Style (Ultra-Compact & Fixed Visibility)
+# Swiss International Style
 # ---------------------------------------------------------------------------
 STYLE = """
 QWidget {
@@ -240,7 +240,7 @@ class CameraThread(QThread):
 
 
 # ---------------------------------------------------------------------------
-# CameraTile (Overlay Header + 80px Right Button Column)
+# CameraTile (Overlay Headers + Floating Icon Buttons)
 # ---------------------------------------------------------------------------
 class CameraTile(QWidget):
     def __init__(self, well_index, camera_id, parent=None):
@@ -253,12 +253,11 @@ class CameraTile(QWidget):
         self._build_ui()
 
     def _build_ui(self):
-        # Horizontal layout: Video (stretch) + Button Column (80px fixed)
-        layout = QHBoxLayout(self)
+        # Layout takes 100% of space, no dedicated button column
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # 1. Video Area (Takes all remaining space)
         self.video_container = QWidget()
         self.video_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.video_container.setStyleSheet("background-color:#000000;")
@@ -267,7 +266,7 @@ class CameraTile(QWidget):
         video_layout.setContentsMargins(0, 0, 0, 0)
         video_layout.setSpacing(0)
 
-        # Custom cropping label
+        # Custom cropping label fills the entire container
         self.video_label = CroppingLabel()
         video_layout.addWidget(self.video_label)
 
@@ -289,27 +288,21 @@ class CameraTile(QWidget):
         self.status_label.move(8, 36)
         self.status_label.raise_()
 
-        layout.addWidget(self.video_container, stretch=1)
-
-        # 2. Button Column (Fixed 80px width, vertically centered)
-        btn_col = QWidget()
-        btn_col.setFixedWidth(80)
-        btn_col.setStyleSheet("background-color:#F2F2F2; border-left: 2px solid #000000;")
-        
-        btn_layout = QVBoxLayout(btn_col)
-        btn_layout.setContentsMargins(6, 0, 6, 0)
-        btn_layout.setSpacing(6)
+        # Overlay Buttons (Right side, vertically centered)
+        self.button_overlay = QWidget(self.video_container)
+        self.button_overlay.setStyleSheet("background-color: transparent;")
+        btn_layout = QVBoxLayout(self.button_overlay)
+        btn_layout.setContentsMargins(0, 0, 12, 0) # 12px from right edge
+        btn_layout.setSpacing(12)
         btn_layout.addStretch() # Pushes buttons to vertical center
-
-        self.btn_start = QPushButton("START")
-        self.btn_stop  = QPushButton("STOP")
-        self.btn_snap  = QPushButton("SNAP")
         
-        self.btn_stop.setObjectName("secondary")
-        self.btn_snap.setObjectName("secondary")
+        # Unicode icons for Play, Pause, Camera
+        self.btn_start = QPushButton("▶")
+        self.btn_stop  = QPushButton("⏸")
+        self.btn_snap  = QPushButton("📷")
+        
         self.btn_stop.setEnabled(False)
         self.btn_snap.setEnabled(False)
-
         if self._camera_id is None:
             self.btn_start.setEnabled(False)
 
@@ -318,11 +311,53 @@ class CameraTile(QWidget):
         self.btn_snap.clicked.connect(self.take_snapshot)
 
         for btn in (self.btn_start, self.btn_stop, self.btn_snap):
-            btn.setFixedHeight(32)
-            btn_layout.addWidget(btn)
+            btn.setFixedSize(48, 48)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(0, 0, 0, 220);
+                    color: #FFFFFF;
+                    border: 2px solid #FFFFFF;
+                    border-radius: 0px;
+                    font-size: 24px;
+                }
+                QPushButton:hover {
+                    background-color: #FF3000;
+                    border-color: #FF3000;
+                }
+                QPushButton:disabled {
+                    background-color: rgba(100, 100, 100, 220);
+                    border-color: #666666;
+                    color: #CCCCCC;
+                }
+            """)
+            btn_layout.addWidget(btn, alignment=Qt.AlignRight)
             
         btn_layout.addStretch()
-        layout.addWidget(btn_col)
+        self.button_overlay.raise_()
+
+        layout.addWidget(self.video_container, stretch=1)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Dynamically reposition overlays on resize to keep them perfectly placed
+        self.header_label.move(8, 8)
+        self.status_label.move(8, 36)
+        
+        if hasattr(self, 'button_overlay'):
+            # Dimensions: 48px width + 12px margin = 60px width
+            # Height: 48*3 + 12*2 = 168px height
+            overlay_w = 60
+            overlay_h = 168
+            
+            container_w = self.video_container.width()
+            container_h = self.video_container.height()
+            
+            # Center vertically, pin to right edge
+            x = container_w - overlay_w
+            y = max(40, (container_h - overlay_h) // 2) # Ensure it doesn't overlap the top header
+            
+            self.button_overlay.setGeometry(x, y, overlay_w, overlay_h)
+            self.button_overlay.raise_()
 
     def start_stream(self):
         if self._thread and self._thread.isRunning():
@@ -414,7 +449,6 @@ class CameraSettingsPanel(QWidget):
         inner.setContentsMargins(6, 6, 6, 6)
         inner.setSpacing(6)
 
-        # Exposure
         exp_group = QGroupBox("EXPOSURE")
         exp_layout = QVBoxLayout(exp_group)
         exp_layout.setContentsMargins(6, 14, 6, 6)
@@ -425,7 +459,6 @@ class CameraSettingsPanel(QWidget):
         exp_layout.addWidget(self.combo_exposure)
         inner.addWidget(exp_group)
 
-        # Gain
         gain_group = QGroupBox("GAIN")
         gain_layout = QVBoxLayout(gain_group)
         gain_layout.setContentsMargins(6, 14, 6, 6)
@@ -435,7 +468,6 @@ class CameraSettingsPanel(QWidget):
         gain_layout.addWidget(self.combo_gain)
         inner.addWidget(gain_group)
 
-        # FPS
         fps_group = QGroupBox("FRAME RATE")
         fps_layout = QVBoxLayout(fps_group)
         fps_layout.setContentsMargins(6, 14, 6, 6)
@@ -446,14 +478,12 @@ class CameraSettingsPanel(QWidget):
         fps_layout.addWidget(self.combo_fps)
         inner.addWidget(fps_group)
 
-        # Apply Button (Explicitly styled for permanent visibility)
         btn_apply = QPushButton("APPLY TO ALL")
         btn_apply.setObjectName("apply_btn")
         btn_apply.setFixedHeight(36)
         btn_apply.clicked.connect(self._emit_settings)
         inner.addWidget(btn_apply)
 
-        # Snapshots
         snap_group = QGroupBox("SNAPSHOTS")
         snap_layout = QVBoxLayout(snap_group)
         snap_layout.setContentsMargins(6, 14, 6, 6)
@@ -498,6 +528,7 @@ class CameraViewerWidget(QWidget):
         super().__init__(parent)
         self._num_wells = num_wells
         self._tiles = []
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding) # Conforms strictly to tab space
         self._build_ui()
 
     def _build_ui(self):
@@ -554,7 +585,7 @@ class CameraViewerWidget(QWidget):
 
 
 # ---------------------------------------------------------------------------
-# Standalone entry point
+# Standalone entry point (Only runs if executed directly)
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     app = QApplication(sys.argv)
@@ -562,6 +593,7 @@ if __name__ == "__main__":
 
     win = QWidget()
     win.setWindowTitle("MCCB — CAMERA VIEWER")
+    win.resize(1280, 800)
 
     layout = QVBoxLayout(win)
     layout.setContentsMargins(0, 0, 0, 0)

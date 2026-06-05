@@ -870,29 +870,26 @@ class MCCB_UI(QWidget):
 
         # --- header ---
         header = QFrame()
-        header.setStyleSheet("""
-            background-color: #FFFFFF; 
-            border-bottom: 3px solid #000000; 
-            min-height: 60px; 
-            max-height: 60px;
-        """)
+        # Exactly 60px height, 0 top/bottom margins ensures perfect vertical centering
+        header.setStyleSheet("background-color: #FFFFFF; border-bottom: 3px solid #000000; min-height: 60px; max-height: 60px;")
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(16, 8, 16, 8)
+        header_layout.setContentsMargins(32, 0, 32, 0) 
         
         title_lbl = QLabel("MCCB CONTROLLER")
         title_lbl.setFont(QFont("Inter", 20, QFont.Bold))
         title_lbl.setStyleSheet("color: #000000; letter-spacing: 2px; text-transform: uppercase; border: none;")
         header_layout.addWidget(title_lbl)
+        
         header_layout.addStretch()
         
         reconfig_btn = QPushButton("RECONFIGURE PORTS")
         reconfig_btn.setProperty("variant", "secondary")
-        reconfig_btn.setFixedHeight(48)
+        reconfig_btn.setFixedHeight(40) # Shrunk to fit perfectly in 60px header
         reconfig_btn.setStyleSheet("""
             QPushButton {
                 background-color: #FFFFFF;
                 color: #000000;
-                border: 3px solid #000000;
+                border: 2px solid #000000;
                 font-weight: 700;
                 text-transform: uppercase;
                 letter-spacing: 1px;
@@ -906,7 +903,7 @@ class MCCB_UI(QWidget):
         header_layout.addWidget(reconfig_btn)
         
         exit_btn = QPushButton("EXIT APPLICATION")
-        exit_btn.setFixedHeight(48)
+        exit_btn.setFixedHeight(40) # Shrunk to fit perfectly in 60px header
         exit_btn.setStyleSheet("""
             QPushButton { background-color: #FF3000; color: #FFFFFF; border: 2px solid #FF3000; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;}
             QPushButton:hover { background-color: #000000; border-color: #000000; }
