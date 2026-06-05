@@ -17,15 +17,20 @@ from fastapi.responses import FileResponse
 app = FastAPI()
 
 # =========================================================================
-# 1. SERVE REACT FRONTEND (The Fix for the Blank Screen)
+# 1. SERVE REACT FRONTEND (FIXED: Properly serves styles.css and assets)
 # =========================================================================
-# Mount the 'assets' folder so the browser can load the JS/CSS bundles
+# Mount the 'assets' folder for Vite's JS/CSS bundles
 app.mount("/assets", StaticFiles(directory="js/dist/assets"), name="assets")
 
-# Serve the main index.html for the root and any frontend routes
-@app.get("/")
-@app.get("/{full_path:path}")
-async def serve_react(full_path: str = ""):
+# Serve root-level static files (like styles.css, favicon.ico)
+@app.get("/{file_name:path}")
+async def serve_static_files(file_name: str):
+    file_path = os.path.join("js/dist", file_name)
+    if os.path.isfile(file_path):
+        return FileResponse(file_path)
+    
+    # If the file doesn't exist, it's likely a frontend route (e.g., /control), 
+    # so serve index.html to let React Router handle it.
     return FileResponse("js/dist/index.html")
 
 # =========================================================================
@@ -33,11 +38,11 @@ async def serve_react(full_path: str = ""):
 # =========================================================================
 active_ws = None
 loop = None
-serial_objects = {}      # well_num -> serial.Serial object
-serial_threads = {}      # well_num -> threading.Thread
-camera_threads = {}      # well_num -> threading.Thread
-stop_events = {}         # key -> threading.Event
-camera_settings = {}     # well_num -> dict of settings
+serial_objects = {}
+serial_threads = {}
+camera_threads = {}
+stop_events = {}
+camera_settings = {}
 
 def send_ws_sync(msg_type, data):
     if active_ws and loop:
