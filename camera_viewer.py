@@ -316,8 +316,8 @@ class CameraThread(QThread):
 # ---------------------------------------------------------------------------
 class CameraTile(QWidget):
     # Overlay button geometry — tweak here only
-    _BTN_W     = 24   # px wide
-    _BTN_H     = 50   # px tall  (compact so 3 fit easily)
+    _BTN_W     = 120   # px wide
+    _BTN_H     = 24   # px tall  (compact so 3 fit easily)
     _BTN_GAP   = 60    # px between buttons
     _RIGHT_PAD = 12    # px from right edge of tile
 
