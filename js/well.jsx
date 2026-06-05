@@ -54,8 +54,12 @@ function LogPanel({ well, filter, height }) {
       </div>
       <div className="term grow" ref={scrollRef}>
         {shown.length === 0
-          ? <div className="ln" style={{ opacity: .5 }}> > awaiting data…</div>
-          : shown.map((l, i) => <div className={'ln' + (i === shown.length - 1 ? ' fresh' : '')} key={i}> > {l}</div>)}
+          ? <div className="ln" style={{ opacity: .5 }}> &gt; awaiting data…</div>
+          : shown.map((l, i) => (
+              <div className={'ln' + (i === shown.length - 1 ? ' fresh' : '')} key={i}>
+                &gt; {l}
+              </div>
+            ))}
       </div>
     </div>
   );
@@ -92,7 +96,7 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
     
   const status = isE ? well.electricStatus : well.magneticStatus;
   const title = isE ? 'Electric Field' : 'Magnetic Field';
-  const unit = isE ? 'V/cm' : 'G';
+  const unit = isE ? 'V/cm' : 'Gauss';
   const filter = isE ? 'voltage' : 'gauss';
   
   const readouts = isE ? (
@@ -112,7 +116,7 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
     </React.Fragment>
   );
   
-  const roCols = 4; // Always 4 columns now to accommodate RMS
+  const roCols = isE ? 4 : 4; // Always 4 columns to accommodate RMS
   const chart = <ChartCard title={title + ' — Measured vs Setpoint'} well={well} accessor={acc} accent={accent} variant={variant} grid={grid} />;
 
   return (
@@ -271,3 +275,4 @@ function WellTab({ wellNum, layout, variant, grid, accent, onConfigure }) {
 }
 
 Object.assign(window, { WellTab });
+export default WellTab;
