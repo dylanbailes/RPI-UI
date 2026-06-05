@@ -7,6 +7,7 @@ Plug-in compatible with mccb_template_test.py.
 import sys
 import time
 import numpy as np
+import os
 
 import gi
 gi.require_version('Aravis', '0.8')
@@ -17,13 +18,11 @@ from PyQt5.QtWidgets import (
     QHBoxLayout, QGridLayout, QComboBox, QGroupBox, QSizePolicy,
     QFileDialog
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QMutex, QMutexLocker
-from PyQt5.QtGui import QImage, QPixmap
-
-import os
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QMutex, QMutexLocker, QRect
+from PyQt5.QtGui import QImage, QPixmap, QPainter
 
 # ---------------------------------------------------------------------------
-# Swiss International Style (Ultra-Compact)
+# Swiss International Style (Ultra-Compact & Fixed Visibility)
 # ---------------------------------------------------------------------------
 STYLE = """
 QWidget {
@@ -40,11 +39,11 @@ QPushButton {
     padding: 0px 4px;
     font-weight: bold;
     letter-spacing: 1px;
-    min-height: 28px;
 }
 QPushButton:hover {
     background-color: #FF3000;
     border-color: #FF3000;
+    color: #FFFFFF;
 }
 QPushButton:disabled {
     background-color: #999999;
@@ -74,17 +73,11 @@ QPushButton#apply_btn {
 QPushButton#apply_btn:hover {
     background-color: #FF3000;
     border-color: #FF3000;
-}
-QPushButton#exit_btn {
-    background-color: #FF3000;
     color: #FFFFFF;
-    border: 2px solid #FF3000;
-    min-height: 48px;
-    font-weight: bold;
 }
-QPushButton#exit_btn:hover {
+QPushButton#apply_btn:pressed {
     background-color: #000000;
-    border-color: #000000;
+    color: #FF3000;
 }
 QComboBox {
     border: 2px solid #000000;
@@ -117,6 +110,39 @@ QGroupBox::title {
     font-size: 11px;
 }
 """
+
+# ---------------------------------------------------------------------------
+# Custom Label that CROPS to fit (Keep Aspect Ratio by Expanding)
+# ---------------------------------------------------------------------------
+class CroppingLabel(QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pixmap = None
+        # CRITICAL: Ignore native size hints so it doesn't force the layout to expand
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+
+    def setPixmap(self, pixmap):
+        self._pixmap = pixmap
+        self.update()
+
+    def pixmap(self):
+        return self._pixmap
+
+    def paintEvent(self, event):
+        if self._pixmap and not self._pixmap.isNull():
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setRenderHint(QPainter.SmoothPixmapTransform)
+            
+            # Qt.KeepAspectRatioByExpanding fills the rect and crops the excess
+            scaled = self._pixmap.scaled(self.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            
+            # Center the cropped image
+            x = (self.width() - scaled.width()) // 2
+            y = (self.height() - scaled.height()) // 2
+            painter.drawPixmap(x, y, scaled)
+        else:
+            super().paintEvent(event)
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +240,7 @@ class CameraThread(QThread):
 
 
 # ---------------------------------------------------------------------------
-# CameraTile
+# CameraTile (Overlay Header + 80px Right Button Column)
 # ---------------------------------------------------------------------------
 class CameraTile(QWidget):
     def __init__(self, well_index, camera_id, parent=None):
@@ -227,52 +253,58 @@ class CameraTile(QWidget):
         self._build_ui()
 
     def _build_ui(self):
-        # Zero margins and spacing to eliminate ALL gaps
-        layout = QVBoxLayout(self)
+        # Horizontal layout: Video (stretch) + Button Column (80px fixed)
+        layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Ultra-compact header
-        header = QLabel(f"WELL {self._well_index + 1:02d}")
-        header.setFixedHeight(20)
-        header.setStyleSheet("background-color:#000000; color:#FFFFFF; font-weight:bold; letter-spacing:1px; font-size:11px; padding-left: 4px; padding-top: 2px;")
-        layout.addWidget(header)
-
-        # Video container with internal layout (no manual resize needed, no gaps)
+        # 1. Video Area (Takes all remaining space)
         self.video_container = QWidget()
         self.video_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.video_container.setStyleSheet("background-color:#000000; border: 2px solid #000000;")
+        self.video_container.setStyleSheet("background-color:#000000;")
         
         video_layout = QVBoxLayout(self.video_container)
         video_layout.setContentsMargins(0, 0, 0, 0)
         video_layout.setSpacing(0)
 
-        self.video_label = QLabel()
-        self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.video_label.setStyleSheet("background-color:#000000;")
-        self.video_label.setScaledContents(True)
+        # Custom cropping label
+        self.video_label = CroppingLabel()
         video_layout.addWidget(self.video_label)
 
+        # Overlay Header (Top-Left)
+        self.header_label = QLabel(f"WELL {self._well_index + 1:02d}", self.video_container)
+        self.header_label.setStyleSheet(
+            "color:#FFFFFF; font-weight:900; font-size:14px; letter-spacing:2px; "
+            "background-color: rgba(0,0,0,180); padding: 4px 8px;"
+        )
+        self.header_label.move(8, 8)
+        self.header_label.raise_()
+
+        # Overlay Status (Below Header)
         self.status_label = QLabel("STOPPED", self.video_container)
         self.status_label.setStyleSheet(
-            "color:#FFFFFF; font-size:10px; letter-spacing:1px; "
-            "background-color: rgba(0,0,0,160); padding: 1px 4px;"
+            "color:#FFFFFF; font-size:11px; letter-spacing:1px; "
+            "background-color: rgba(0,0,0,160); padding: 2px 6px;"
         )
-        self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        self.status_label.move(4, 4)
+        self.status_label.move(8, 36)
         self.status_label.raise_()
 
         layout.addWidget(self.video_container, stretch=1)
 
-        # Buttons flush against video container
-        footer = QHBoxLayout()
-        footer.setContentsMargins(0, 0, 0, 0)
-        footer.setSpacing(0)
+        # 2. Button Column (Fixed 80px width, vertically centered)
+        btn_col = QWidget()
+        btn_col.setFixedWidth(80)
+        btn_col.setStyleSheet("background-color:#F2F2F2; border-left: 2px solid #000000;")
+        
+        btn_layout = QVBoxLayout(btn_col)
+        btn_layout.setContentsMargins(6, 0, 6, 0)
+        btn_layout.setSpacing(6)
+        btn_layout.addStretch() # Pushes buttons to vertical center
 
         self.btn_start = QPushButton("START")
         self.btn_stop  = QPushButton("STOP")
         self.btn_snap  = QPushButton("SNAP")
+        
         self.btn_stop.setObjectName("secondary")
         self.btn_snap.setObjectName("secondary")
         self.btn_stop.setEnabled(False)
@@ -286,10 +318,11 @@ class CameraTile(QWidget):
         self.btn_snap.clicked.connect(self.take_snapshot)
 
         for btn in (self.btn_start, self.btn_stop, self.btn_snap):
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            btn.setFixedHeight(28)
-            footer.addWidget(btn)
-        layout.addLayout(footer)
+            btn.setFixedHeight(32)
+            btn_layout.addWidget(btn)
+            
+        btn_layout.addStretch()
+        layout.addWidget(btn_col)
 
     def start_stream(self):
         if self._thread and self._thread.isRunning():
@@ -302,19 +335,18 @@ class CameraTile(QWidget):
         self.btn_stop.setEnabled(True)
         self.btn_snap.setEnabled(True)
         self.status_label.setText("LIVE")
-        self.status_label.setStyleSheet("color:#FF3000; font-size:11px; letter-spacing:1px;")
+        self.status_label.setStyleSheet("color:#FF3000; font-size:11px; letter-spacing:1px; font-weight:bold;")
 
     def stop_stream(self):
         if self._thread:
             self._thread.stop()
             self._thread = None
-        self.video_label.clear()
-        self.video_label.setStyleSheet("background-color:#000000;")
+        self.video_label.setPixmap(QPixmap()) # Clear image
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.btn_snap.setEnabled(False)
         self.status_label.setText("STOPPED")
-        self.status_label.setStyleSheet("color:#000000; font-size:11px; letter-spacing:1px;")
+        self.status_label.setStyleSheet("color:#FFFFFF; font-size:11px; letter-spacing:1px;")
 
     def apply_settings(self, exposure_us, gain, fps):
         if self._thread:
@@ -336,7 +368,7 @@ class CameraTile(QWidget):
 
     def _on_error(self, msg):
         self.status_label.setText("ERROR")
-        self.status_label.setStyleSheet("color:#FF3000; font-size:11px; letter-spacing:1px;")
+        self.status_label.setStyleSheet("color:#FF3000; font-size:11px; letter-spacing:1px; font-weight:bold;")
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.btn_snap.setEnabled(False)
@@ -348,34 +380,24 @@ class CameraTile(QWidget):
 
 
 # ---------------------------------------------------------------------------
-# CameraSettingsPanel (Ultra-Compact)
+# CameraSettingsPanel
 # ---------------------------------------------------------------------------
 class CameraSettingsPanel(QWidget):
     settings_changed = pyqtSignal(int, float, int)
 
     EXPOSURE_OPTIONS = [
-        ("500 µs",   500),
-        ("1 ms",    1000),
-        ("2 ms",    2000),
-        ("5 ms",    5000),
-        ("10 ms",  10000),
-        ("20 ms",  20000),
-        ("50 ms",  50000),
-        ("100 ms", 100000),
+        ("500 µs",   500), ("1 ms",    1000), ("2 ms",    2000), ("5 ms",    5000),
+        ("10 ms",  10000), ("20 ms",  20000), ("50 ms",  50000), ("100 ms", 100000),
     ]
     GAIN_OPTIONS = [
-        ("0 dB",   0.0),
-        ("3 dB",   3.0),
-        ("6 dB",   6.0),
-        ("12 dB", 12.0),
-        ("18 dB", 18.0),
-        ("24 dB", 24.0),
+        ("0 dB",   0.0), ("3 dB",   3.0), ("6 dB",   6.0),
+        ("12 dB", 12.0), ("18 dB", 18.0), ("24 dB", 24.0),
     ]
     FPS_OPTIONS = [5, 10, 15, 20, 30]
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedWidth(220)  # Reduced from 240 to give more room to cameras
+        self.setFixedWidth(220)
         self._build_ui()
 
     def _build_ui(self):
@@ -384,14 +406,15 @@ class CameraSettingsPanel(QWidget):
         layout.setSpacing(0)
 
         header = QLabel("CAMERA SETTINGS")
-        header.setFixedHeight(28)
-        header.setStyleSheet("background-color:#000000; color:#FFFFFF; font-size:12px; font-weight:bold; letter-spacing:2px; padding-left:8px; padding-top: 4px;")
+        header.setFixedHeight(32)
+        header.setStyleSheet("background-color:#000000; color:#FFFFFF; font-size:13px; font-weight:900; letter-spacing:2px; padding-left:8px; padding-top: 6px;")
         layout.addWidget(header)
 
         inner = QVBoxLayout()
         inner.setContentsMargins(6, 6, 6, 6)
-        inner.setSpacing(6)  # Reduced from 12 to 6
+        inner.setSpacing(6)
 
+        # Exposure
         exp_group = QGroupBox("EXPOSURE")
         exp_layout = QVBoxLayout(exp_group)
         exp_layout.setContentsMargins(6, 14, 6, 6)
@@ -402,6 +425,7 @@ class CameraSettingsPanel(QWidget):
         exp_layout.addWidget(self.combo_exposure)
         inner.addWidget(exp_group)
 
+        # Gain
         gain_group = QGroupBox("GAIN")
         gain_layout = QVBoxLayout(gain_group)
         gain_layout.setContentsMargins(6, 14, 6, 6)
@@ -411,6 +435,7 @@ class CameraSettingsPanel(QWidget):
         gain_layout.addWidget(self.combo_gain)
         inner.addWidget(gain_group)
 
+        # FPS
         fps_group = QGroupBox("FRAME RATE")
         fps_layout = QVBoxLayout(fps_group)
         fps_layout.setContentsMargins(6, 14, 6, 6)
@@ -421,12 +446,14 @@ class CameraSettingsPanel(QWidget):
         fps_layout.addWidget(self.combo_fps)
         inner.addWidget(fps_group)
 
+        # Apply Button (Explicitly styled for permanent visibility)
         btn_apply = QPushButton("APPLY TO ALL")
         btn_apply.setObjectName("apply_btn")
         btn_apply.setFixedHeight(36)
         btn_apply.clicked.connect(self._emit_settings)
         inner.addWidget(btn_apply)
 
+        # Snapshots
         snap_group = QGroupBox("SNAPSHOTS")
         snap_layout = QVBoxLayout(snap_group)
         snap_layout.setContentsMargins(6, 14, 6, 6)
@@ -507,12 +534,6 @@ class CameraViewerWidget(QWidget):
         body.addWidget(self.settings_panel)
 
         root.addLayout(body, stretch=1)
-
-    def _on_exit(self):
-        self.stop_all()
-        app = QApplication.instance()
-        if app:
-            app.quit()
 
     @staticmethod
     def _enumerate_cameras():

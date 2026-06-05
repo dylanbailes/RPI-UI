@@ -154,8 +154,9 @@ QTabBar::tab {
     text-transform: uppercase;
     letter-spacing: 1px;
     margin-right: 2px;
-    min-height: 36px;
-    min-width: 140px; 
+    min-height: 40px;
+    max-height: 40px;
+    min-width: 120px; 
 }
 QTabBar::tab:selected {
     background-color: #000000;
@@ -869,7 +870,12 @@ class MCCB_UI(QWidget):
 
         # --- header ---
         header = QFrame()
-        header.setStyleSheet("background-color: #FFFFFF; border-bottom: 4px solid #000000; border-top: none; border-left: none; border-right: none;")
+        header.setStyleSheet("""
+            background-color: #FFFFFF; 
+            border-bottom: 3px solid #000000; 
+            min-height: 60px; 
+            max-height: 60px;
+        """)
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(16, 8, 16, 8)
         
