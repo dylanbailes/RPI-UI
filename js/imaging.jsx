@@ -1,3 +1,4 @@
+import React from 'react';
 import { useEffect, useState, useRef } from 'react';
 
 // ---- Camera tile (Real Hardware Feed) -------------------------------------

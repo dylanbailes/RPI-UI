@@ -3,6 +3,7 @@
  * collapsible terminal log, COMBINED / ELECTRIC / MAGNETIC sub-views.
  * Layout + chart styling are driven by Tweaks.
  * ========================================================================== */
+import React from 'react';
 
 // ---- Single readout cell --------------------------------------------------
 function Readout({ label, value, decimals = 2, unit, accent }) {

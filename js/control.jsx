@@ -2,6 +2,7 @@
  * control.jsx — CONTROL tab (mode select + live overview), Mode dialog,
  * and the docked touch numpad for parameter entry.
  * ========================================================================== */
+import React from 'react';
 
 // ---- Touch numpad ---------------------------------------------------------
 function Numpad({ armedField, value, onKey, onClear, onConfirm }) {

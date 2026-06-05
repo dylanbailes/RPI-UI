@@ -2,6 +2,7 @@
  * charts.jsx — Live canvas chart + animated numeric readouts (Swiss style)
  * Exports to window: LiveChart, AnimatedNumber, StatusPill, MiniSpark
  * ========================================================================== */
+import React from 'react';
 const { useRef, useEffect, useState } = React;
 
 // ---- useEngineTick: re-render subscriber to the telemetry engine ----------
