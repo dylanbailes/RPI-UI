@@ -293,7 +293,7 @@ class CameraTile(QWidget):
         self.button_overlay.setStyleSheet("background-color: transparent;")
         btn_layout = QVBoxLayout(self.button_overlay)
         btn_layout.setContentsMargins(0, 0, 12, 0) # 12px from right edge
-        btn_layout.setSpacing(12)
+        btn_layout.setSpacing(2)
         btn_layout.addStretch() # Pushes buttons to vertical center
         
         # Unicode icons for Play, Pause, Camera
@@ -311,7 +311,7 @@ class CameraTile(QWidget):
         self.btn_snap.clicked.connect(self.take_snapshot)
 
         for btn in (self.btn_start, self.btn_stop, self.btn_snap):
-            btn.setFixedSize(48, 48)
+            btn.setFixedSize(60, 24)
             btn.setStyleSheet("""
                 QPushButton {
                     background-color: rgba(0, 0, 0, 220);
