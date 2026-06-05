@@ -201,12 +201,14 @@
     start() {
       if (this.running) return;
       this.running = true;
-      connectToBackend(); // Start WebSocket instead of setInterval
+      // WebSocket is already open from module-load time; nothing extra needed here.
     }
 
     stop() {
       this.running = false;
-      if (ws) ws.close();
+      // Do NOT close the WebSocket here — it's persistent across reconfigures.
+      // The socket auto-reconnects if it drops; closing it manually causes a
+      // reconnect loop whenever the user hits "Reconfigure Ports".
     }
 
     // Tell the backend to open/close serial connections
@@ -271,6 +273,10 @@
   }
 
   const engine = new Engine();
+
+  // Connect to the backend immediately when the page loads so that
+  // port/camera lists arrive before the user interacts with the UI.
+  connectToBackend();
 
   window.MCCB = {
     MAX_EFIELD, MAX_MAG, HISTORY,
