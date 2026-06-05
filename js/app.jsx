@@ -82,7 +82,7 @@ function App() {
   React.useEffect(() => { document.documentElement.style.setProperty('--accent', t.accent); }, [t.accent]);
   React.useEffect(() => {
     function fit() {
-      const app = document.getElementById('root'); // Changed from 'app' to 'root'
+      const app = document.getElementById('app');
       if (!app) return;
       const w = window.innerWidth || 1280, h = window.innerHeight || 800;
       let s = Math.min(w / 1280, h / 800);
@@ -94,7 +94,8 @@ function App() {
     window.addEventListener('resize', fit);
     window.addEventListener('load', fit);
     const ro = new ResizeObserver(fit);
-    ro.observe(document.getElementById('root')); // Changed from 'viewport' to 'root'
+    const vp = document.getElementById('viewport');
+    if (vp) ro.observe(vp);
     return () => { window.removeEventListener('resize', fit); window.removeEventListener('load', fit); ro.disconnect(); };
   }, []);
 
@@ -201,8 +202,7 @@ function TweaksPanelMount({ t, setTweak }) {
   );
 }
 
-// 4. THE FIX FOR REACT ERROR #299
-// Changed 'app' to 'root' to match the <div id="root"></div> in index.html
+// Mount React into #root, which sits inside the #app kiosk frame (see index.html)
 const rootElement = document.getElementById('root');
 if (rootElement) {
   ReactDOM.createRoot(rootElement).render(

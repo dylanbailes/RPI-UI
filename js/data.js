@@ -277,6 +277,7 @@
     engine: engine,
     enumeratePorts, 
     enumerateCameras,
+    sendToBackend,
     clamp,
   };
 })();

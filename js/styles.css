@@ -42,6 +42,12 @@ html, body {
   transform-origin: center center;
   box-shadow: 0 20px 80px rgba(0,0,0,.5);
 }
+/* React mounts here — must fill #app entirely */
+#root {
+  width: 100%; height: 100%;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
 
 /* ============================ TYPOGRAPHY ================================== */
 .section-number {
