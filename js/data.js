@@ -97,6 +97,7 @@ class WellDevice {
     this.coilCurrent = 0;
     this.calibrated = false;
     this.calibrating = false;
+    this.flashing = false;
     this.gaussLut = null;
     this.reverseGaussLut = null;
 
@@ -237,6 +238,21 @@ function handleBackendMessage(msg) {
         if (msg.data.status === 'done') engine.wells[wellNum].calibrating = false;
         engine._emit();
     }
+  } else if (msg.type === 'flash_status') {
+    const wellNum = msg.well;
+    const w = engine.wells[wellNum];
+    if (w) {
+      const status = msg.data.status;
+      w.flashing = (status === 'running');
+      if (status === 'running') {
+        window.dispatchEvent(new CustomEvent('mccb_toast', { detail: { kind: 'ok', text: `Flashing firmware to Well ${wellNum}…` } }));
+      } else if (status === 'done') {
+        window.dispatchEvent(new CustomEvent('mccb_toast', { detail: { kind: 'ok', text: `Well ${wellNum} firmware flashed` } }));
+      } else if (status === 'error') {
+        window.dispatchEvent(new CustomEvent('mccb_toast', { detail: { kind: 'error', text: `Well ${wellNum} flash failed: ${msg.data.msg || 'unknown error'}` } }));
+      }
+      engine._emit();
+    }
   }
 }
 
@@ -258,12 +274,12 @@ class Engine {
   start() { this.running = true; }
   stop() { this.running = false; }
 
-  assign(map) {
+  assign(map, doFlash = true) {
     for (let i = 1; i <= 4; i++) {
       const w = this.wells[i];
       if (map[i]) { 
         w.assigned = true; w.port = map[i].port; w.label = map[i].label; 
-        sendToBackend({ cmd: 'connect_well', well: i, port: map[i].port });
+        sendToBackend({ cmd: 'connect_well', well: i, port: map[i].port, flash: !!doFlash });
       } else { 
         w.assigned = false; w.reset(); 
         sendToBackend({ cmd: 'disconnect_well', well: i });

@@ -5,6 +5,7 @@ function Connection({ onConnect, onExit }) {
     const [ports, setPorts] = useState([]);
     const [sel, setSel] = useState({ 1: '', 2: '', 3: '', 4: '' });
     const [spin, setSpin] = useState(false);
+    const [flashOnConnect, setFlashOnConnect] = useState(true);
 
     useEffect(() => {
         const initialPorts = window.MCCB.enumeratePorts();
@@ -35,7 +36,7 @@ function Connection({ onConnect, onExit }) {
                 map[i] = { port: sel[i], label: p ? p.label : sel[i] };
             }
         }
-        onConnect(map);
+        onConnect(map, flashOnConnect);
     }
 
     return (
@@ -82,8 +83,42 @@ function Connection({ onConnect, onExit }) {
                     </div>
                 </div>
 
+                {/* Firmware flashing option */}
+                <div className="gb" style={{ marginTop: 22 }}>
+                    <div className="gb-title">Firmware</div>
+                    <div className="gb-body">
+                        <button
+                            className="row"
+                            onClick={() => setFlashOnConnect((v) => !v)}
+                            style={{
+                                width: '100%', justifyContent: 'space-between', alignItems: 'center',
+                                gap: 16, padding: '14px 16px', border: '2px solid #000', background: '#fff',
+                                cursor: 'pointer', textAlign: 'left',
+                            }}>
+                            <div className="col" style={{ gap: 4 }}>
+                                <span style={{ fontWeight: 800, fontSize: 13, letterSpacing: 1, textTransform: 'uppercase' }}>Flash Firmware On Connect</span>
+                                <span style={{ color: 'var(--dim)', fontSize: 12, lineHeight: 1.5, maxWidth: 560 }}>
+                                    Compiles <span className="mono">esp32_helmholtz.ino</span> and uploads it to each mapped well before streaming.
+                                    The sketch is only recompiled when it changes. Turn off to skip flashing when nothing was modified.
+                                </span>
+                            </div>
+                            {/* Swiss-style toggle */}
+                            <span style={{
+                                flex: '0 0 auto', width: 54, height: 30, borderRadius: 0, border: '2px solid #000',
+                                background: flashOnConnect ? 'var(--accent)' : '#fff', position: 'relative',
+                                transition: 'background .15s',
+                            }}>
+                                <span style={{
+                                    position: 'absolute', top: 2, left: flashOnConnect ? 26 : 2, width: 22, height: 22,
+                                    background: flashOnConnect ? '#fff' : '#000', transition: 'left .15s',
+                                }}></span>
+                            </span>
+                        </button>
+                    </div>
+                </div>
+
                 <p style={{ color: 'var(--dim)', fontSize: 13, lineHeight: 1.5, marginTop: 18, maxWidth: 620 }}>
-                    Each well drives its own ESP32 over USB serial @ 115200 baud. Bridge chips appear as CP210x or CH340.
+                    Each well drives its own ESP32 over USB serial @ 500000 baud. Bridge chips appear as CP210x or CH340.
                     Wells left as <strong>(NONE)</strong> stay idle. {dupes.length > 0 && <span style={{ color: 'var(--accent)', fontWeight: 700 }}> One port is mapped to multiple wells.</span>}
                 </p>
             </div>
@@ -91,7 +126,9 @@ function Connection({ onConnect, onExit }) {
             <div className="divider"></div>
             <div className="row" style={{ padding: '16px 40px', gap: 16, justifyContent: 'space-between' }}>
                 <button className="btn btn-danger" onClick={onExit} style={{ minWidth: 200 }}>Exit Application</button>
-                <button className="btn" onClick={connect} disabled={assignedCount === 0 || dupes.length > 0} style={{ minWidth: 280, fontSize: 16 }}>Connect &amp; Continue →</button>
+                <button className="btn" onClick={connect} disabled={assignedCount === 0 || dupes.length > 0} style={{ minWidth: 280, fontSize: 16 }}>
+                    {flashOnConnect ? 'Flash & Connect →' : 'Connect & Continue →'}
+                </button>
             </div>
         </div>
     );

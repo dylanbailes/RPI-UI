@@ -112,8 +112,8 @@ function App() {
     setTimeout(() => setToasts((s) => s.filter((x) => x.id !== id)), o.kind === 'shot' ? 2600 : 2400);
   }
 
-  function onConnect(map) {
-    window.MCCB.engine.assign(map);
+  function onConnect(map, doFlash = true) {
+    window.MCCB.engine.assign(map, doFlash);
     window.MCCB.engine.start();
     setPhase('main'); setTab('CONTROL');
     // seed a little activity so charts aren't empty on arrival

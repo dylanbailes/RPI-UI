@@ -1,10 +1,14 @@
 import os
 import json
+import time
 import asyncio
 import serial
 import serial.tools.list_ports
 import struct
 import threading
+import subprocess
+import hashlib
+import shutil
 import gi
 
 gi.require_version('Aravis', '0.8')
@@ -59,6 +63,128 @@ def send_ws_binary_sync(binary_data):
             asyncio.run_coroutine_threadsafe(active_ws.send_bytes(binary_data), loop)
         except Exception as e:
             print(f"WS Binary send error: {e}")
+
+# =========================================================================
+# 2b. FIRMWARE FLASHING (auto-flash ESP32 on connect via arduino-cli)
+# =========================================================================
+# Requirements on the Pi:
+#   - arduino-cli installed and on PATH (or set MCCB_ARDUINO_CLI)
+#   - ESP32 core installed:  arduino-cli core install esp32:esp32
+#   - The sketch must live in a folder named after the .ino, e.g.
+#       <repo>/esp32_helmholtz/esp32_helmholtz.ino
+#
+# Config (all overridable via environment variables):
+FLASH_ENABLED = os.environ.get("MCCB_FLASH", "1") == "1"
+ARDUINO_CLI   = os.environ.get("MCCB_ARDUINO_CLI", "arduino-cli")
+FQBN          = os.environ.get("MCCB_FQBN", "esp32:esp32:esp32")
+SKETCH_PATH   = os.environ.get(
+    "MCCB_SKETCH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "esp32_helmholtz")
+)
+BUILD_DIR     = os.environ.get("MCCB_BUILD_DIR", "/tmp/mccb_build")
+FLASH_SETTLE_S = float(os.environ.get("MCCB_FLASH_SETTLE", "1.5"))  # boot delay after upload
+
+_compile_lock = threading.Lock()
+_last_compile_hash = None
+
+
+def _sketch_dir_and_ino():
+    """Return (sketch_dir, ino_path). Accepts either a sketch folder or a .ino path."""
+    if SKETCH_PATH.endswith(".ino"):
+        return os.path.dirname(SKETCH_PATH), SKETCH_PATH
+    name = os.path.basename(SKETCH_PATH.rstrip("/"))
+    return SKETCH_PATH, os.path.join(SKETCH_PATH, name + ".ino")
+
+
+def _hash_sketch():
+    """Hash the .ino so we only recompile when the source actually changes."""
+    _, ino = _sketch_dir_and_ino()
+    try:
+        with open(ino, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def compile_firmware():
+    """Compile the sketch once; cached by source hash. Returns (ok, message)."""
+    global _last_compile_hash
+    if shutil.which(ARDUINO_CLI) is None and not os.path.isabs(ARDUINO_CLI):
+        return False, f"'{ARDUINO_CLI}' not found on PATH"
+    with _compile_lock:
+        h = _hash_sketch()
+        if h is None:
+            _, ino = _sketch_dir_and_ino()
+            return False, f"sketch not found at {ino}"
+        # Skip recompile if source is unchanged and we still have a build.
+        if h == _last_compile_hash and os.path.isdir(BUILD_DIR) and os.listdir(BUILD_DIR):
+            return True, "cached"
+        sketch_dir, _ = _sketch_dir_and_ino()
+        os.makedirs(BUILD_DIR, exist_ok=True)
+        try:
+            proc = subprocess.run(
+                [ARDUINO_CLI, "compile", "--fqbn", FQBN, "--output-dir", BUILD_DIR, sketch_dir],
+                capture_output=True, text=True, timeout=600
+            )
+        except FileNotFoundError:
+            return False, f"'{ARDUINO_CLI}' not found"
+        except subprocess.TimeoutExpired:
+            return False, "compile timed out"
+        if proc.returncode != 0:
+            return False, (proc.stderr or proc.stdout or "compile failed").strip()[-600:]
+        _last_compile_hash = h
+        return True, "compiled"
+
+
+def upload_firmware(port):
+    """Upload the cached build to a single port. Returns (ok, message)."""
+    sketch_dir, _ = _sketch_dir_and_ino()
+    try:
+        proc = subprocess.run(
+            [ARDUINO_CLI, "upload", "--fqbn", FQBN, "--input-dir", BUILD_DIR, "-p", port, sketch_dir],
+            capture_output=True, text=True, timeout=240
+        )
+    except FileNotFoundError:
+        return False, f"'{ARDUINO_CLI}' not found"
+    except subprocess.TimeoutExpired:
+        return False, "upload timed out"
+    if proc.returncode != 0:
+        return False, (proc.stderr or proc.stdout or "upload failed").strip()[-600:]
+    return True, "uploaded"
+
+
+def flash_port(port):
+    """Compile (cached) then upload to `port`. Returns (ok, message)."""
+    ok, msg = compile_firmware()
+    if not ok:
+        return False, f"compile: {msg}"
+    ok, msg = upload_firmware(port)
+    if not ok:
+        return False, f"upload: {msg}"
+    return True, "flashed"
+
+
+def well_worker(well_num, port, stop_event, old_thread, do_flash):
+    """Provision a well: wait for the old reader to release the port, optionally
+    flash firmware, then run the serial read loop. Runs in its own daemon thread
+    so the websocket event loop is never blocked by the slow flash."""
+    # Make sure the previous reader on this well has fully closed the port,
+    # otherwise the upload (which needs exclusive access) will fail.
+    if old_thread is not None and old_thread.is_alive():
+        old_thread.join(timeout=3.0)
+
+    if do_flash:
+        send_ws_sync("flash_status", {"well": well_num, "status": "running"})
+        ok, msg = flash_port(port)
+        if ok:
+            send_ws_sync("flash_status", {"well": well_num, "status": "done", "msg": msg})
+            time.sleep(FLASH_SETTLE_S)  # let the board reboot before we read
+        else:
+            # Don't abort — fall through and try to read an already-flashed board.
+            send_ws_sync("flash_status", {"well": well_num, "status": "error", "msg": msg})
+            send_ws_sync("error", {"well": well_num, "msg": f"Flash failed (reading anyway): {msg}"})
+
+    serial_reader_loop(well_num, port, stop_event)
 
 # =========================================================================
 # 3. BACKGROUND HARDWARE THREADS
@@ -198,6 +324,12 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             msg = await websocket.receive()
+            # Low-level .receive() returns a disconnect *message* instead of
+            # raising WebSocketDisconnect. Detect it and break, otherwise the
+            # next .receive() raises "Cannot call receive once a disconnect
+            # message has been received."
+            if msg["type"] == "websocket.disconnect":
+                break
             if "text" in msg:
                 data = json.loads(msg["text"])
                 cmd = data.get("cmd")
@@ -230,9 +362,17 @@ async def websocket_endpoint(websocket: WebSocket):
                     
                 elif cmd == "connect_well":
                     well, port = data["well"], data["port"]
+                    # Per-connect flash flag from the frontend; gated by the
+                    # server-side FLASH_ENABLED master switch.
+                    do_flash = bool(data.get("flash", True)) and FLASH_ENABLED
                     if well in stop_events: stop_events[well].set()
+                    old_thread = serial_threads.get(well)   # hand off so the worker can join it
                     stop_evt = threading.Event(); stop_events[well] = stop_evt
-                    t = threading.Thread(target=serial_reader_loop, args=(well, port, stop_evt), daemon=True)
+                    t = threading.Thread(
+                        target=well_worker,
+                        args=(well, port, stop_evt, old_thread, do_flash),
+                        daemon=True
+                    )
                     t.start(); serial_threads[well] = t
                     
                 elif cmd == "disconnect_well":
@@ -305,8 +445,14 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         print("UI disconnected")
     finally:
-        for evt in stop_events.values(): evt.set()
-        active_ws = None
+        # Only tear down if THIS handler still owns the active socket. The
+        # frontend auto-reconnects every few seconds; without this guard a stale
+        # handler's cleanup would stop the hardware threads and null out
+        # active_ws that a newer connection already owns.
+        if active_ws is websocket:
+            for evt in stop_events.values():
+                evt.set()
+            active_ws = None
 
 if __name__ == "__main__":
     import uvicorn
