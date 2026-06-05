@@ -316,9 +316,9 @@ class CameraThread(QThread):
 # ---------------------------------------------------------------------------
 class CameraTile(QWidget):
     # Overlay button geometry — tweak here only
-    _BTN_W     = 60   # px wide
-    _BTN_H     = 32   # px tall  (compact so 3 fit easily)
-    _BTN_GAP   = 40    # px between buttons
+    _BTN_W     = 24   # px wide
+    _BTN_H     = 50   # px tall  (compact so 3 fit easily)
+    _BTN_GAP   = 60    # px between buttons
     _RIGHT_PAD = 12    # px from right edge of tile
 
     def __init__(self, well_index, camera_id, parent=None):
