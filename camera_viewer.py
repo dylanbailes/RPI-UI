@@ -496,12 +496,13 @@ class CameraViewerWidget(QWidget):
         grid_container = QWidget()
         grid_container.setLayout(grid)
         grid_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        grid_container.setMinimumHeight(740)  # 2 rows × ~370px each
 
         scroll = QScrollArea()
         scroll.setWidget(grid_container)
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         scroll.setStyleSheet("QScrollArea { border: none; background-color: #FFFFFF; }")
         body.addWidget(scroll, stretch=1)
 
