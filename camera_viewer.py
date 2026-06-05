@@ -315,11 +315,12 @@ class CameraThread(QThread):
 # CameraTile
 # ---------------------------------------------------------------------------
 class CameraTile(QWidget):
-    # Overlay button geometry — tweak here only
-    _BTN_W     = 60   # px wide
-    _BTN_H     = 12   # px tall  (compact so 3 fit easily)
-    _BTN_GAP   = 60    # px between buttons
-    _RIGHT_PAD = 12    # px from right edge of tile
+    # Button geometry expressed as fractions of the tile's SHORT side so buttons
+    # are always square and proportionally gapped no matter the window size.
+    # Change these two numbers to tune appearance; nothing else needs touching.
+    _BTN_FRAC     = 0.11   # button side  = 11% of min(tile_w, tile_h)
+    _BTN_GAP_FRAC = 0.030  # inter-button gap = 3% of min(tile_w, tile_h)
+    _RIGHT_PAD_PX = 8      # fixed right-edge inset (px) — small and constant
 
     def __init__(self, well_index, camera_id, parent=None):
         super().__init__(parent)
@@ -375,13 +376,13 @@ class CameraTile(QWidget):
         self.status_label.adjustSize()
         self.status_label.raise_()
 
-        # Three IconButtons — also direct children of CameraTile
+        # Three IconButtons — also direct children of CameraTile.
+        # Size is set dynamically in _reposition_overlays, not here.
         self.btn_start = IconButton('play',   self)
         self.btn_stop  = IconButton('pause',  self)
         self.btn_snap  = IconButton('camera', self)
 
         for btn in (self.btn_start, self.btn_stop, self.btn_snap):
-            btn.setFixedSize(self._BTN_W, self._BTN_H)
             btn.raise_()
 
         self.btn_stop.setEnabled(False)
@@ -417,19 +418,24 @@ class CameraTile(QWidget):
         self.status_label.adjustSize()
         self.status_label.move(6, 6 + self.header_label.height() + 2)
 
-        # Buttons: right edge, vertically centred
-        bw = self._BTN_W
-        bh = self._BTN_H
-        gap = self._BTN_GAP
-        pad = self._RIGHT_PAD
+        # ── Buttons: square, sized proportionally to the tile's short side ──
+        short = min(w, h)
+        bs  = max(20, int(short * self._BTN_FRAC))      # button side (square)
+        gap = max(4,  int(short * self._BTN_GAP_FRAC))  # gap between buttons
+        pad = self._RIGHT_PAD_PX
 
-        total_h = 3 * bh + 2 * gap
-        bx = w - bw - pad
-        by = max(50, (h - total_h) // 2)
+        total_h = 3 * bs + 2 * gap
 
-        self.btn_start.setGeometry(bx, by,              bw, bh)
-        self.btn_stop .setGeometry(bx, by + bh + gap,   bw, bh)
-        self.btn_snap .setGeometry(bx, by + 2*(bh+gap), bw, bh)
+        bx = w - bs - pad
+
+        # True vertical centre — only push down if buttons would overlap header
+        header_bottom = 6 + self.header_label.height() + 2 + self.status_label.height() + 6
+        ideal_by = (h - total_h) // 2
+        by = max(header_bottom, ideal_by)
+
+        self.btn_start.setGeometry(bx, by,              bs, bs)
+        self.btn_stop .setGeometry(bx, by + bs + gap,   bs, bs)
+        self.btn_snap .setGeometry(bx, by + 2*(bs+gap), bs, bs)
 
         for btn in (self.btn_start, self.btn_stop, self.btn_snap):
             btn.raise_()
