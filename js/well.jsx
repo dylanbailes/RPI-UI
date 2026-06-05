@@ -23,6 +23,11 @@ function CalStatusPill({ well, big }) {
 function SidebarCalibration({ well }) {
   return (
     <div style={{ padding: 14, borderTop: '2px solid #000' }}>
+      {well.flashing && (
+        <div className="status-pill" style={{ background: '#FFE9B0', color: '#000', fontSize: 10, padding: '3px 8px', marginBottom: 10 }}>
+          <span className="status-dot pulse" style={{ background: '#C98A00' }}></span>FLASHING FIRMWARE
+        </div>
+      )}
       <div className="kicker" style={{ marginBottom: 8 }}>Magnetic Calibration</div>
       <div style={{ marginBottom: 10 }}><CalStatusPill well={well} /></div>
       <button
@@ -32,7 +37,7 @@ function SidebarCalibration({ well }) {
           background: well.calibrating ? 'var(--dim)' : (!well.calibrated ? 'var(--accent)' : ''),
           color: (well.calibrating || !well.calibrated) ? '#fff' : '',
         }}
-        disabled={well.calibrating}
+        disabled={well.calibrating || well.flashing}
         onClick={() => window.MCCB.engine.calibrateWell(well.num)}>
         {well.calibrating ? 'Calibrating…' : (well.calibrated ? 'Recalibrate' : 'Calibrate Now')}
       </button>
@@ -61,7 +66,7 @@ function LogPanel({ well, filter, height }) {
   const scrollRef = React.useRef(null);
   
   let lines = well.log;
-  if (filter) lines = lines.filter((l) => l.includes(filter));
+  if (filter) lines = lines.filter((l) => l.startsWith('»') || l.includes(filter));
   if (paused) { 
     if (!frozen.current) frozen.current = lines.slice(); 
     lines = frozen.current; 
@@ -90,11 +95,19 @@ function LogPanel({ well, filter, height }) {
       <div className="term grow" ref={scrollRef}>
         {shown.length === 0
           ? <div className="ln" style={{ opacity: .5 }}>&gt; awaiting data…</div>
-          : shown.map((l, i) => (
-              <div className={'ln' + (i === shown.length - 1 ? ' fresh' : '')} key={i}>
-                &gt; {l}
-              </div>
-            ))}
+          : shown.map((l, i) => {
+              const color = l.includes('[ERROR]') ? '#FF3000'
+                : l.includes('[WARN]') ? '#C98A00'
+                : l.includes('[OK]') ? '#0A6B2E'
+                : l.startsWith('»') ? '#2A6FDB'
+                : undefined;
+              return (
+                <div className={'ln' + (i === shown.length - 1 ? ' fresh' : '')} key={i}
+                  style={color ? { color, fontWeight: 600 } : undefined}>
+                  &gt; {l}
+                </div>
+              );
+            })}
       </div>
     </div>
   );
@@ -216,7 +229,7 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
 
 // ---- Stacked layout: chart grows, log collapses ---------------------------
 function CollapsibleStack({ chart, well, filter }) {
-  const [open, setOpen] = React.useState(false);
+  const [open, setOpen] = React.useState(true);
   return (
     <React.Fragment>
       <div className="grow" style={{ display: 'flex', minHeight: 0 }}>{chart}</div>

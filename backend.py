@@ -153,14 +153,30 @@ def upload_firmware(port):
     return True, "uploaded"
 
 
-def flash_port(port):
-    """Compile (cached) then upload to `port`. Returns (ok, message)."""
+def send_log(well_num, line, level="info"):
+    """Push a human-readable line to the UI's serial log AND the server console."""
+    print(f"[well {well_num}] {line}")
+    send_ws_sync("log", {"well": well_num, "level": level, "line": line})
+
+
+def flash_port(port, log=None):
+    """Compile (cached) then upload to `port`. Returns (ok, message).
+    `log` is an optional callable(level, line) for step-by-step progress."""
+    def emit(level, line):
+        if log:
+            log(level, line)
+    emit("info", "Compiling firmware…")
     ok, msg = compile_firmware()
     if not ok:
+        emit("error", f"Compile failed: {msg}")
         return False, f"compile: {msg}"
+    emit("ok", "Build is current (cached)" if msg == "cached" else "Compile succeeded")
+    emit("info", f"Uploading to {port} …")
     ok, msg = upload_firmware(port)
     if not ok:
+        emit("error", f"Upload failed: {msg}")
         return False, f"upload: {msg}"
+    emit("ok", f"Upload complete on {port}")
     return True, "flashed"
 
 
@@ -171,18 +187,23 @@ def well_worker(well_num, port, stop_event, old_thread, do_flash):
     # Make sure the previous reader on this well has fully closed the port,
     # otherwise the upload (which needs exclusive access) will fail.
     if old_thread is not None and old_thread.is_alive():
+        send_log(well_num, "Waiting for previous connection to release the port…")
         old_thread.join(timeout=3.0)
 
     if do_flash:
         send_ws_sync("flash_status", {"well": well_num, "status": "running"})
-        ok, msg = flash_port(port)
+        send_log(well_num, f"=== Flashing Well {well_num} on {port} ===")
+        ok, msg = flash_port(port, log=lambda lvl, ln: send_log(well_num, ln, lvl))
         if ok:
-            send_ws_sync("flash_status", {"well": well_num, "status": "done", "msg": msg})
+            send_ws_sync("flash_status", {"well": well_num, "status": "done", "msg": "uploaded"})
+            send_log(well_num, f"Firmware flashed — waiting {FLASH_SETTLE_S:.1f}s for reboot…", "ok")
             time.sleep(FLASH_SETTLE_S)  # let the board reboot before we read
         else:
             # Don't abort — fall through and try to read an already-flashed board.
             send_ws_sync("flash_status", {"well": well_num, "status": "error", "msg": msg})
-            send_ws_sync("error", {"well": well_num, "msg": f"Flash failed (reading anyway): {msg}"})
+            send_log(well_num, f"Flash failed — attempting to read existing firmware anyway. ({msg})", "error")
+    else:
+        send_log(well_num, "Flashing skipped — connecting to existing firmware on the board")
 
     serial_reader_loop(well_num, port, stop_event)
 
@@ -192,49 +213,84 @@ def well_worker(well_num, port, stop_event, old_thread, do_flash):
 def serial_reader_loop(well_num, port, stop_event):
     ser = None
     try:
-        # FIX 1: Match the ESP32's 500000 baud rate (firmware is set to 500000)
+        # Match the ESP32's 500000 baud rate (firmware is set to 500000)
         ser = serial.Serial(port, 500000, timeout=0.1)
         serial_objects[well_num] = ser
+        send_log(well_num, f"Serial port {port} opened @ 500000 baud — awaiting data…", "ok")
         buf = ""
-        
+        last_data = time.time()
+        warned_silent = False
+        total_lines = 0
+
         while not stop_event.is_set():
             data = ser.read(512).decode(errors='ignore')
             if data:
+                if warned_silent:
+                    send_log(well_num, "Serial data resumed.", "ok")
+                last_data = time.time()
+                warned_silent = False
                 buf += data
                 while '\n' in buf:
                     line, buf = buf.split('\n', 1)
                     line = line.strip()
-                    if line:
-                        # NEW: Handle calibration protocol
-                        if line.startswith("CAL_LUT "):
-                            lut_str = line[8:]
-                            try:
-                                lut = [float(x) for x in lut_str.split(',')]
-                                send_ws_sync("calibration", {"well": well_num, "lut": lut})
-                            except ValueError:
-                                pass
-                        elif line == "CAL_START":
-                            send_ws_sync("cal_status", {"well": well_num, "status": "running"})
-                        elif line == "CAL_END":
-                            send_ws_sync("cal_status", {"well": well_num, "status": "done"})
+                    if not line:
+                        continue
+
+                    # ---- Calibration protocol ----------------------------
+                    if line.startswith("CAL_LUT "):
+                        lut_str = line[8:]
+                        try:
+                            lut = [float(x) for x in lut_str.split(',')]
+                            send_ws_sync("calibration", {"well": well_num, "lut": lut})
+                            peak = max(lut) if lut else 0.0
+                            send_log(well_num, f"CAL_LUT received — {len(lut)} points, peak {peak:.2f} G", "ok")
+                        except ValueError:
+                            send_log(well_num, f"CAL_LUT parse error on: {line[:80]}", "error")
+                    elif line == "CAL_START":
+                        send_ws_sync("cal_status", {"well": well_num, "status": "running"})
+                        send_log(well_num, "CAL_START — calibration sweep underway", "info")
+                    elif line == "CAL_END":
+                        send_ws_sync("cal_status", {"well": well_num, "status": "done"})
+                        send_log(well_num, "CAL_END — calibration sequence complete", "ok")
+                    else:
+                        # ---- Telemetry (JSON, or two bare floats) --------
+                        parsed = False
+                        try:
+                            obj = json.loads(line)
+                            send_ws_sync("telemetry", {"well": well_num, "data": obj})
+                            parsed = True
+                        except json.JSONDecodeError:
+                            parts = line.split()
+                            if len(parts) >= 2:
+                                try:
+                                    obj = {"gauss1": float(parts[0]), "gauss2": float(parts[1])}
+                                    send_ws_sync("telemetry", {"well": well_num, "data": obj})
+                                    parsed = True
+                                except ValueError:
+                                    pass
+                        if parsed:
+                            total_lines += 1
+                            if total_lines == 1:
+                                send_log(well_num, "First telemetry frame received — board is streaming.", "ok")
                         else:
-                            # Existing telemetry parsing
-                            try:
-                                obj = json.loads(line)
-                                send_ws_sync("telemetry", {"well": well_num, "data": obj})
-                            except json.JSONDecodeError:
-                                parts = line.split()
-                                if len(parts) >= 2:
-                                    try:
-                                        obj = {"gauss1": float(parts[0]), "gauss2": float(parts[1])}
-                                        send_ws_sync("telemetry", {"well": well_num, "data": obj})
-                                    except ValueError:
-                                        pass
+                            # Unrecognized line: almost certainly a firmware
+                            # debug/boot print. Surface it verbatim so the user
+                            # can see exactly what the board is saying.
+                            send_ws_sync("log", {"well": well_num, "level": "raw", "line": line})
+            else:
+                # No bytes this cycle — warn once if the board has gone quiet.
+                if not warned_silent and (time.time() - last_data) > 3.0:
+                    warned_silent = True
+                    send_log(well_num,
+                             f"No serial data from {port} after 3s — check that the firmware "
+                             f"is running and the baud rate is 500000.", "warn")
     except Exception as e:
+        send_log(well_num, f"Serial error on {port}: {e}", "error")
         send_ws_sync("error", {"well": well_num, "msg": str(e)})
     finally:
         if well_num in serial_objects: del serial_objects[well_num]
         if ser and ser.is_open: ser.close()
+        send_log(well_num, f"Serial port {port} closed.", "info")
 
 def camera_reader_loop(well_num, camera_id, stop_event):
     try:

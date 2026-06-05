@@ -253,6 +253,19 @@ function handleBackendMessage(msg) {
       }
       engine._emit();
     }
+  } else if (msg.type === 'log') {
+    const wellNum = msg.well;
+    const w = engine.wells[wellNum];
+    if (w) {
+      const level = msg.data.level || 'info';
+      const line = msg.data.line || '';
+      // Raw firmware lines pass through verbatim; system/event lines get a
+      // leading marker so the per-metric log filter never hides them.
+      const formatted = level === 'raw' ? line : `» [${level.toUpperCase()}] ${line}`;
+      w.log.push(formatted);
+      if (w.log.length > 400) w.log.shift();
+      engine._emit();
+    }
   }
 }
 
@@ -322,6 +335,8 @@ class Engine {
     const w = this.wells[wellNum];
     if (!w || !w.assigned || w.calibrating) return;
     w.calibrating = true;
+    w.log.push('» [INFO] Calibration requested — sent "c" to device, waiting for CAL_START…');
+    if (w.log.length > 400) w.log.shift();
     this._command({ cmd: 'calibrate', well: wellNum });
     this._emit();
   }
@@ -332,6 +347,8 @@ class Engine {
     for (const w of Object.values(this.wells)) {
       if (w.assigned && !w.calibrating) {
         w.calibrating = true;
+        w.log.push('» [INFO] Calibration requested — sent "c" to device, waiting for CAL_START…');
+        if (w.log.length > 400) w.log.shift();
         this._command({ cmd: 'calibrate', well: w.num });
         started++;
       }
