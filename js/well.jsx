@@ -1,8 +1,8 @@
 /* ============================================================================
- * well.jsx — Per-well data tabs. Graph-primary, animated readouts,
- * collapsible terminal log, COMBINED / ELECTRIC / MAGNETIC sub-views.
- * Layout + chart styling are driven by Tweaks.
- * ========================================================================== */
+well.jsx — Per-well data tabs. Graph-primary, animated readouts,
+collapsible terminal log, COMBINED / ELECTRIC / MAGNETIC sub-views.
+Layout + chart styling are driven by Tweaks.
+========================================================================== */
 import React from 'react';
 
 // ---- Single readout cell --------------------------------------------------
@@ -24,13 +24,17 @@ function LogPanel({ well, filter, height }) {
   const [paused, setPaused] = React.useState(false);
   const frozen = React.useRef(null);
   const scrollRef = React.useRef(null);
-
+  
   let lines = well.log;
   if (filter) lines = lines.filter((l) => l.includes(filter));
-  if (paused) { if (!frozen.current) frozen.current = lines.slice(); lines = frozen.current; }
-  else if (frozen.current) frozen.current = null;
+  if (paused) { 
+    if (!frozen.current) frozen.current = lines.slice(); 
+    lines = frozen.current; 
+  } else if (frozen.current) {
+    frozen.current = null; 
+  }
+  
   const shown = lines.slice(-80);
-
   React.useEffect(() => {
     if (!paused && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   });
@@ -40,14 +44,18 @@ function LogPanel({ well, filter, height }) {
       <div className="row" style={{ justifyContent: 'space-between', padding: '6px 2px', alignItems: 'center' }}>
         <span className="kicker">Raw Serial Feed{filter ? ' · ' + filter : ''}</span>
         <div className="row gap-8">
-          <button className="btn btn-secondary btn-sm" style={{ minHeight: 38, minWidth: 92 }} onClick={() => setPaused((p) => !p)}>{paused ? 'Resume' : 'Pause'}</button>
-          <button className="btn btn-secondary btn-sm" style={{ minHeight: 38, minWidth: 92 }} onClick={() => { well.log.length = 0; frozen.current = null; }}>Clear</button>
+          <button className="btn btn-secondary btn-sm" style={{ minHeight: 38, minWidth: 92 }} onClick={() => setPaused((p) => !p)}>
+            {paused ? 'Resume' : 'Pause'}
+          </button>
+          <button className="btn btn-secondary btn-sm" style={{ minHeight: 38, minWidth: 92 }} onClick={() => { well.log.length = 0; frozen.current = null; }}>
+            Clear
+          </button>
         </div>
       </div>
       <div className="term grow" ref={scrollRef}>
         {shown.length === 0
-          ? <div className="ln" style={{ opacity: .5 }}>&gt; awaiting data…</div>
-          : shown.map((l, i) => <div className={'ln' + (i === shown.length - 1 ? ' fresh' : '')} key={i}>&gt; {l}</div>)}
+          ? <div className="ln" style={{ opacity: .5 }}> > awaiting data…</div>
+          : shown.map((l, i) => <div className={'ln' + (i === shown.length - 1 ? ' fresh' : '')} key={i}> > {l}</div>)}
       </div>
     </div>
   );
@@ -77,14 +85,16 @@ function ChartCard({ title, well, accessor, accent, variant, grid, height }) {
 function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }) {
   useEngineTick(10);
   const isE = metric === 'electric';
+  
   const acc = isE
     ? { series: () => well.history.efield.values, setpoint: () => well.setEfield, latest: () => well.measEfield, max: window.MCCB.MAX_EFIELD }
     : { series: () => well.history.gauss.values, setpoint: () => well.setGauss, latest: () => well.measGauss, max: window.MCCB.MAX_MAG };
+    
   const status = isE ? well.electricStatus : well.magneticStatus;
   const title = isE ? 'Electric Field' : 'Magnetic Field';
-  const unit = isE ? 'V/cm' : 'Gauss';
+  const unit = isE ? 'V/cm' : 'G';
   const filter = isE ? 'voltage' : 'gauss';
-
+  
   const readouts = isE ? (
     <React.Fragment>
       <Readout label="Setpoint" value={well.setEfield} unit="V/cm" />
@@ -96,11 +106,13 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
     <React.Fragment>
       <Readout label="Setpoint" value={well.setGauss} unit="G" />
       <Readout label="Measured" value={well.measGauss} unit="G" accent />
+      {/* NEW: RMS Readout for Magnetic Field */}
+      <Readout label="RMS (2s)" value={well.measRms || 0} unit="G" />
       <Readout label="Coil Current" value={well.coilCurrent} decimals={1} unit="mA" />
     </React.Fragment>
   );
-  const roCols = isE ? 4 : 3;
-
+  
+  const roCols = 4; // Always 4 columns now to accommodate RMS
   const chart = <ChartCard title={title + ' — Measured vs Setpoint'} well={well} accessor={acc} accent={accent} variant={variant} grid={grid} />;
 
   return (
@@ -115,7 +127,7 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
           <button className="btn btn-danger btn-sm" style={{ minWidth: 120 }} onClick={() => window.MCCB.engine.stopWell(well.num)}>Stop</button>
         </div>
       </div>
-
+      
       <div className="readout-strip" style={{ gridTemplateColumns: `repeat(${roCols}, 1fr)` }}>{readouts}</div>
 
       {layout === 'split' ? (
@@ -164,8 +176,8 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
   const eAcc = { series: () => well.history.efield.values, setpoint: () => well.setEfield, latest: () => well.measEfield, max: window.MCCB.MAX_EFIELD };
   const mAcc = { series: () => well.history.gauss.values, setpoint: () => well.setGauss, latest: () => well.measGauss, max: window.MCCB.MAX_MAG };
   const side = layout === 'split';
-
-  const block = (title, acc, status, setVal, measVal, unit, mode) => (
+  
+  const block = (title, acc, status, setVal, measVal, unit, mode, rmsVal) => (
     <div className="col grow" style={{ minHeight: 0, gap: 10 }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
         <div className="row gap-12" style={{ alignItems: 'center' }}>
@@ -174,7 +186,15 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
         </div>
         <div className="row gap-16" style={{ alignItems: 'baseline' }}>
           <span className="kicker">SET <span className="mono" style={{ color: '#000', fontSize: 14 }}>{setVal.toFixed(2)}</span></span>
-          <span className="mono" style={{ fontSize: 22, fontWeight: 700, color: accent }}><AnimatedNumber value={measVal} decimals={2} /><span className="ro-unit">{unit}</span></span>
+          <span className="mono" style={{ fontSize: 22, fontWeight: 700, color: accent }}>
+            <AnimatedNumber value={measVal} decimals={2} /><span className="ro-unit">{unit}</span>
+          </span>
+          {/* NEW: Compact RMS indicator in combined view */}
+          {rmsVal !== undefined && (
+            <span className="kicker" style={{ color: 'var(--dim)' }}>
+              RMS: <span className="mono" style={{ color: 'var(--ink)', fontSize: 14 }}>{rmsVal.toFixed(2)}</span>
+            </span>
+          )}
           <button className="btn btn-secondary btn-sm" style={{ minHeight: 38, minWidth: 96 }} onClick={() => onConfigure(well.num, mode)}>Set</button>
         </div>
       </div>
@@ -193,7 +213,7 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
       </div>
       <div className={side ? 'row grow gap-14' : 'col grow gap-14'} style={{ minHeight: 0 }}>
         {block('Electric', eAcc, well.electricStatus, well.setEfield, well.measEfield, 'V/cm', 'electric')}
-        {block('Magnetic', mAcc, well.magneticStatus, well.setGauss, well.measGauss, 'G', 'magnetic')}
+        {block('Magnetic', mAcc, well.magneticStatus, well.setGauss, well.measGauss, 'G', 'magnetic', well.measRms)}
       </div>
     </div>
   );
@@ -203,7 +223,7 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
 function WellTab({ wellNum, layout, variant, grid, accent, onConfigure }) {
   const well = window.MCCB.engine.wells[wellNum];
   const [view, setView] = React.useState('COMBINED');
-
+  
   if (!well.assigned) {
     return (
       <div className="well-wrap">
@@ -223,13 +243,14 @@ function WellTab({ wellNum, layout, variant, grid, accent, onConfigure }) {
   }
 
   const navItems = [['COMBINED', 'All Data'], ['ELECTRIC', 'Electric'], ['MAGNETIC', 'Magnetic']];
+  
   return (
     <div className="well-wrap">
       <div className="well-side">
         <div className="well-side-hd">WELL {wellNum}</div>
         {navItems.map(([v, sub]) => (
           <button key={v} className={'side-nav' + (view === v ? ' sel' : '')} onClick={() => setView(v)}>
-            {v}<small>{sub}</small>
+            {v} <small>{sub}</small>
           </button>
         ))}
         <div className="grow"></div>
