@@ -40,8 +40,7 @@ QPushButton {
     padding: 0px 8px;
     font-weight: bold;
     letter-spacing: 1px;
-    min-height: 16px;
-    max-height: 16px;
+    min-height: 32px;
 }
 QPushButton:hover {
     background-color: #FF3000;
@@ -62,6 +61,20 @@ QPushButton#secondary:hover {
     color: #FFFFFF;
     border-color: #FF3000;
 }
+QPushButton#apply_btn {
+    background-color: #000000;
+    color: #FFFFFF;
+    border: 2px solid #000000;
+    font-weight: 900;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    min-height: 48px;
+}
+QPushButton#apply_btn:hover {
+    background-color: #FF3000;
+    border-color: #FF3000;
+}
 QPushButton#exit_btn {
     background-color: #FF3000;
     color: #FFFFFF;
@@ -79,8 +92,7 @@ QComboBox {
     padding: 4px 8px;
     background-color: #FFFFFF;
     color: #000000;
-    min-height: 16px;
-    max-height: 16px;
+    min-height: 32px;
 }
 QComboBox::drop-down { border: none; width: 24px; }
 QComboBox QAbstractItemView {
@@ -220,14 +232,13 @@ class CameraTile(QWidget):
 
         # header
         header = QLabel(f"  WELL {self._well_index + 1:02d}")
-        header.setFixedHeight(18)
+        header.setFixedHeight(24)
         header.setStyleSheet("background-color:#000000; color:#FFFFFF; font-weight:bold; letter-spacing:1px; font-size:11px;")
         layout.addWidget(header)
 
         # video label with overlaid status
         video_container = QWidget()
         video_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        video_container.setMinimumSize(200, 150)
         video_container.setStyleSheet("background-color:#000000;")
 
         self.video_label = QLabel(video_container)
@@ -235,7 +246,6 @@ class CameraTile(QWidget):
         self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.video_label.setStyleSheet("background-color:#000000; border: 2px solid #000000;")
         self.video_label.setScaledContents(True)
-        self.video_label.setGeometry(0, 0, 200, 150)
 
         self.status_label = QLabel("STOPPED", video_container)
         self.status_label.setStyleSheet(
@@ -248,12 +258,10 @@ class CameraTile(QWidget):
 
         layout.addWidget(video_container, stretch=1)
 
-        # buttons
+        # buttons - directly under video with no spacing
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 0, 0, 0)
         footer.setSpacing(0)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
 
         self.btn_start = QPushButton("START")
         self.btn_stop  = QPushButton("STOP")
@@ -272,7 +280,7 @@ class CameraTile(QWidget):
 
         for btn in (self.btn_start, self.btn_stop, self.btn_snap):
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            btn.setFixedHeight(12)
+            btn.setFixedHeight(32)
             footer.addWidget(btn)
         layout.addLayout(footer)
 
@@ -367,7 +375,7 @@ class CameraSettingsPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedWidth(300)
+        self.setFixedWidth(240)
         self._build_ui()
 
     def _build_ui(self):
@@ -382,7 +390,7 @@ class CameraSettingsPanel(QWidget):
 
         inner = QVBoxLayout()
         inner.setContentsMargins(12, 12, 12, 12)
-        inner.setSpacing(16)
+        inner.setSpacing(12)
 
         exp_group = QGroupBox("EXPOSURE")
         exp_layout = QVBoxLayout(exp_group)
@@ -411,6 +419,7 @@ class CameraSettingsPanel(QWidget):
         inner.addWidget(fps_group)
 
         btn_apply = QPushButton("APPLY TO ALL")
+        btn_apply.setObjectName("apply_btn")
         btn_apply.clicked.connect(self._emit_settings)
         inner.addWidget(btn_apply)
 

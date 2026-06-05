@@ -871,7 +871,7 @@ class MCCB_UI(QWidget):
         header = QFrame()
         header.setStyleSheet("background-color: #FFFFFF; border-bottom: 4px solid #000000; border-top: none; border-left: none; border-right: none;")
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(32, 8, 32, 8)
+        header_layout.setContentsMargins(16, 8, 16, 8)
         
         title_lbl = QLabel("MCCB CONTROLLER")
         title_lbl.setFont(QFont("Inter", 20, QFont.Bold))
