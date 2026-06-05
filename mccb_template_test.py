@@ -154,7 +154,7 @@ QTabBar::tab {
     text-transform: uppercase;
     letter-spacing: 1px;
     margin-right: 2px;
-    min-height: 52px;
+    min-height: 36px;
     min-width: 140px; 
 }
 QTabBar::tab:selected {
