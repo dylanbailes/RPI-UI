@@ -4,12 +4,46 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 
-const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+// 1. IMPORT YOUR COMPONENTS FOR VITE
+// Adjust the file paths (e.g., './control.jsx') if your files are named differently.
+import ConnectionScreen from './connection.jsx'; 
+import { ControlTab, ModeDialog } from './control.jsx'; // If ModeDialog is in a different file, adjust this
+import WellTab from './well.jsx';
+import { ImagingTab } from './imaging.jsx';
+
+// If you have a separate file for Tweaks, import them here. Otherwise, we use the fallbacks below.
+// import { TweaksPanel, TweakSection, TweakRadio, TweakToggle, TweakColor, useTweaks } from './tweaks.jsx';
+// import { useEngineTick } from './hooks.jsx'; 
+
+const TWEAK_DEFAULTS = {
   "accent": "#FF3000",
   "wellLayout": "stacked",
   "chartStyle": "area",
   "chartGrid": true
-}/*EDITMODE-END*/;
+};
+
+// 2. FALLBACK HOOKS (If these weren't defined in your other files)
+function useTweaks(defaults) {
+  const [state, setState] = React.useState(defaults);
+  const setTweak = (key, val) => setState(s => ({ ...s, [key]: val }));
+  return [state, setTweak];
+}
+
+function useEngineTick() {
+  const [, forceUpdate] = React.useReducer(x => x + 1, 0);
+  React.useEffect(() => {
+    if (!window.MCCB || !window.MCCB.engine) return;
+    const unsub = window.MCCB.engine.subscribe(() => forceUpdate());
+    return () => unsub && unsub();
+  }, []);
+}
+
+// 3. FALLBACK TWEAKS UI (If you don't have a tweaks.jsx file)
+function TweaksPanel({ children }) { return <div style={{display:'none'}}>{children}</div>; }
+function TweakSection() { return null; }
+function TweakRadio() { return null; }
+function TweakToggle() { return null; }
+function TweakColor() { return null; }
 
 function Toasts({ items }) {
   return (
@@ -36,7 +70,7 @@ function App() {
   React.useEffect(() => { document.documentElement.style.setProperty('--accent', t.accent); }, [t.accent]);
   React.useEffect(() => {
     function fit() {
-      const app = document.getElementById('app');
+      const app = document.getElementById('root'); // Changed from 'app' to 'root'
       if (!app) return;
       const w = window.innerWidth || 1280, h = window.innerHeight || 800;
       let s = Math.min(w / 1280, h / 800);
@@ -48,7 +82,7 @@ function App() {
     window.addEventListener('resize', fit);
     window.addEventListener('load', fit);
     const ro = new ResizeObserver(fit);
-    ro.observe(document.getElementById('viewport'));
+    ro.observe(document.getElementById('root')); // Changed from 'viewport' to 'root'
     return () => { window.removeEventListener('resize', fit); window.removeEventListener('load', fit); ro.disconnect(); };
   }, []);
 
@@ -155,4 +189,15 @@ function TweaksPanelMount({ t, setTweak }) {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('app')).render(<App />);
+// 4. THE FIX FOR REACT ERROR #299
+// Changed 'app' to 'root' to match the <div id="root"></div> in index.html
+const rootElement = document.getElementById('root');
+if (rootElement) {
+  ReactDOM.createRoot(rootElement).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  );
+} else {
+  console.error("Could not find <div id='root'></div> in index.html!");
+}
