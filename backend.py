@@ -139,6 +139,39 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     active_ws = websocket
     loop = asyncio.get_running_loop()
+
+    # Push current device lists immediately on connect — the frontend
+    # may not yet be ready to send enumerate commands by the time it renders.
+    async def push_initial_state():
+        try:
+            ports = serial.tools.list_ports.comports()
+            port_list = []
+            for p in ports:
+                desc = (p.description or "").lower()
+                mfr  = (p.manufacturer or "").lower()
+                dev  = (p.device or "").lower()
+                haystack = desc + mfr + dev
+                esp_keywords = ['cp210', 'ch340', 'ch341', 'ftdi', 'esp32', 'uart',
+                                'ttyusb', 'ttyacm', 'silicon labs', 'wch']
+                is_esp = any(k in haystack for k in esp_keywords)
+                port_list.append({
+                    "label": f"{'ESP32' if is_esp else 'Unknown'} — {p.device} ({p.description})",
+                    "port": p.device,
+                    "kind": "ESP32" if is_esp else "Unknown"
+                })
+            await websocket.send_json({"type": "ports", "data": port_list})
+        except Exception as e:
+            print(f"Initial port push error: {e}")
+        try:
+            Aravis.update_device_list()
+            cams = [{"id": Aravis.get_device_id(i), "present": True} for i in range(Aravis.get_n_devices())]
+            while len(cams) < 4:
+                cams.append({"id": None, "present": False})
+            await websocket.send_json({"type": "cameras", "data": cams})
+        except Exception as e:
+            print(f"Initial camera push error: {e}")
+
+    await push_initial_state()
     
     try:
         while True:
@@ -149,7 +182,22 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 if cmd == "enumerate_ports":
                     ports = serial.tools.list_ports.comports()
-                    port_list = [{"label": f"{'ESP32' if any(k in (p.description+p.manufacturer).lower() for k in ['cp210','ch340','ftdi','esp32','uart']) else 'Unknown'} — {p.device} ({p.description})", "port": p.device, "kind": "ESP32"} for p in ports]
+                    port_list = []
+                    for p in ports:
+                        # manufacturer can be None on Linux — guard against it
+                        desc = (p.description or "").lower()
+                        mfr  = (p.manufacturer or "").lower()
+                        dev  = (p.device or "").lower()
+                        haystack = desc + mfr + dev
+                        esp_keywords = ['cp210', 'ch340', 'ch341', 'ftdi', 'esp32', 'uart',
+                                        'ttyusb', 'ttyacm', 'silicon labs', 'wch']
+                        is_esp = any(k in haystack for k in esp_keywords)
+                        kind_label = "ESP32" if is_esp else "Unknown"
+                        port_list.append({
+                            "label": f"{kind_label} — {p.device} ({p.description})",
+                            "port": p.device,
+                            "kind": kind_label
+                        })
                     await websocket.send_json({"type": "ports", "data": port_list})
                     
                 elif cmd == "enumerate_cameras":
