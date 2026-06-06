@@ -256,8 +256,15 @@ void calibrateMagneticLut() {
 // idle task schedulable and the TWDT fed via esp_task_wdt_reset() inside
 // measureGaussAtPwm(). Self-deletes on completion so calTaskHandle going
 // NULL is the reliable "sweep finished" signal.
+//
+// esp_task_wdt_reset() silently fails (logs "task not found") unless the
+// calling task is first subscribed to the TWDT via esp_task_wdt_add(NULL).
+// We subscribe on entry and unsubscribe before deletion so the watchdog
+// never fires on this task regardless of how long the sweep takes.
 void calibrationTask(void *pv) {
+    esp_task_wdt_add(NULL);      // subscribe THIS task to the TWDT
     calibrateMagneticLut();
+    esp_task_wdt_delete(NULL);   // unsubscribe before self-deletion
     calTaskHandle = NULL;
     vTaskDelete(NULL);
 }
