@@ -76,7 +76,7 @@ def send_ws_binary_sync(binary_data):
 # Config (all overridable via environment variables):
 FLASH_ENABLED = os.environ.get("MCCB_FLASH", "1") == "1"
 ARDUINO_CLI   = os.environ.get("MCCB_ARDUINO_CLI", "arduino-cli")
-FQBN          = os.environ.get("MCCB_FQBN", "esp32:esp32:esp32")
+FQBN          = os.environ.get("MCCB_FQBN", "esp32:esp32:esp32doit-devkit-v1")
 SKETCH_PATH   = os.environ.get(
     "MCCB_SKETCH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "esp32_helmholtz")
