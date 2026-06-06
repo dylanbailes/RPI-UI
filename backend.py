@@ -271,11 +271,34 @@ def serial_reader_loop(well_num, port, stop_event):
                         lut_str = line[8:]
                         try:
                             lut = [float(x) for x in lut_str.split(',')]
-                            send_ws_sync("calibration", {"well": well_num, "lut": lut})
-                            peak = max(lut) if lut else 0.0
-                            send_log(well_num, f"CAL_LUT received — {len(lut)} points, peak {peak:.2f} G", "ok")
-                        except ValueError:
-                            send_log(well_num, f"CAL_LUT parse error on: {line[:80]}", "error")
+                            # A complete LUT is always exactly 1001 points
+                            # (0.0 % to 100.0 % in 0.1 % steps). Fewer points
+                            # means the ESP32 TX buffer overflowed mid-line and
+                            # silently dropped the tail — fix: increase
+                            # Serial.setTxBufferSize() in the firmware setup().
+                            if len(lut) != 1001:
+                                msg = (f"CAL_LUT truncated — received {len(lut)}/1001 points. "
+                                       f"The ESP32 TX buffer overflowed; "
+                                       f"Serial.setTxBufferSize() must be >= 8192.")
+                                send_log(well_num, msg, "error")
+                                send_ws_sync("cal_status", {
+                                    "well": well_num,
+                                    "status": "error",
+                                    "msg": f"Truncated LUT ({len(lut)}/1001 points)"
+                                })
+                            else:
+                                peak = max(lut)
+                                send_ws_sync("calibration", {"well": well_num, "lut": lut})
+                                send_log(well_num,
+                                         f"CAL_LUT received — {len(lut)} points, peak {peak:.2f} G", "ok")
+                        except ValueError as exc:
+                            send_log(well_num,
+                                     f"CAL_LUT parse error ({exc}): {line[:80]}", "error")
+                            send_ws_sync("cal_status", {
+                                "well": well_num,
+                                "status": "error",
+                                "msg": "LUT parse error — check firmware serial output"
+                            })
                     elif line == "CAL_START":
                         send_ws_sync("cal_status", {"well": well_num, "status": "running"})
                         send_log(well_num, "CAL_START — calibration sweep underway", "info")

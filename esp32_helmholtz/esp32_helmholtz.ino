@@ -225,14 +225,19 @@ void calibrateMagneticLut() {
     
     lutCalibrated = true;
     
-    // Send the full LUT to the host
+    // Send the full LUT to the host.
+    // Serial.flush() after the LUT line guarantees every byte has left the TX
+    // buffer before CAL_END is queued — without it, CAL_END can arrive at the
+    // Pi before the tail of the LUT if the buffer drains asynchronously.
     Serial.print("CAL_LUT ");
     for(int i=0; i<=1000; i++) {
         Serial.print(helmLut[i], 3);
         if(i < 1000) Serial.print(",");
     }
     Serial.println();
+    Serial.flush();         // wait for full LUT line to drain before CAL_END
     Serial.println("CAL_END");
+    Serial.flush();         // ensure CAL_END itself is fully transmitted
     
     applyBipolarPWM(HELM_IN1_PIN, HELM_IN2_PIN, 0, lastHelmPwm1, lastHelmPwm2, HELM_PWM_FREQ_HZ);
     isCalibrating = false;
@@ -272,7 +277,10 @@ void waveformTask(void *pv) {
 // ============================== SETUP =========================================
 // ==============================================================================
 void setup() {
-    Serial.setTxBufferSize(512);
+    // CAL_LUT sends 1001 floats (~7 KB). The default 512-byte TX buffer silently
+    // drops everything past the first 512 bytes, so the Pi never receives a
+    // complete LUT line. 8192 bytes comfortably holds the full transmission.
+    Serial.setTxBufferSize(8192);
     Serial.begin(500000);   
     delay(500);
     analogSetPinAttenuation(HE1_PIN, ADC_11db);
