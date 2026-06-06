@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <math.h>
-#include <esp_task_wdt.h>
 
 // ==============================================================================
 // ======================== CONFIGURATION & CONSTANTS ===========================
@@ -62,7 +61,7 @@ unsigned long prevHeSampleUs = 0;
 
 portMUX_TYPE paramMux = portMUX_INITIALIZER_UNLOCKED;
 TaskHandle_t waveTaskHandle = NULL;
-TaskHandle_t calTaskHandle  = NULL;   // non-NULL while a calibration sweep is running
+TaskHandle_t calTaskHandle = NULL;
 
 // --- NEW: Calibration State ---
 struct Point { float pwm; float gauss; };
@@ -144,7 +143,7 @@ void autoZero(int samples = 600) {
     if (waveTaskHandle) vTaskResume(waveTaskHandle);
 }
 
-// --- Calibration Helpers ---
+// --- NEW: Calibration Helpers ---
 float measureGaussAtPwm(float pwmPercent) {
     float duty = (pwmPercent / 100.0) * PWM_MAX_VALUE;
     applyBipolarPWM(HELM_IN1_PIN, HELM_IN2_PIN, duty, lastHelmPwm1, lastHelmPwm2, HELM_PWM_FREQ_HZ);
@@ -159,12 +158,6 @@ float measureGaussAtPwm(float pwmPercent) {
         sum1 += analogRead(HE1_PIN);
         delayMicroseconds(500); 
     }
-
-    // Feed the Task WDT — each measurement takes ~500ms and the refinement
-    // loop can call this dozens of times back-to-back, easily exceeding the
-    // default 5s WDT timeout without an explicit reset here.
-    esp_task_wdt_reset();
-
     float rawAvg = (float)sum1 / samples;
     return (rawAvg - he1ZeroOffset) / COUNTS_PER_GAUSS;
 }
@@ -233,33 +226,18 @@ void calibrateMagneticLut() {
     
     lutCalibrated = true;
     
-    // Send the full LUT to the host.
-    // Serial.flush() after the LUT line guarantees every byte has left the TX
-    // buffer before CAL_END is queued — without it, CAL_END can arrive at the
-    // Pi before the tail of the LUT if the buffer drains asynchronously.
+    // Send the full LUT to the host
     Serial.print("CAL_LUT ");
     for(int i=0; i<=1000; i++) {
         Serial.print(helmLut[i], 3);
         if(i < 1000) Serial.print(",");
     }
     Serial.println();
-    Serial.flush();         // wait for full LUT line to drain before CAL_END
     Serial.println("CAL_END");
-    Serial.flush();         // ensure CAL_END itself is fully transmitted
     
     applyBipolarPWM(HELM_IN1_PIN, HELM_IN2_PIN, 0, lastHelmPwm1, lastHelmPwm2, HELM_PWM_FREQ_HZ);
     isCalibrating = false;
     if (waveTaskHandle) vTaskResume(waveTaskHandle);
-}
-
-// FreeRTOS task wrapper so calibration runs off loop(), keeping Core 1's
-// idle task schedulable and the TWDT fed via esp_task_wdt_reset() inside
-// measureGaussAtPwm(). Self-deletes on completion so calTaskHandle going
-// NULL is the reliable "sweep finished" signal.
-void calibrationTask(void *pv) {
-    calibrateMagneticLut();
-    calTaskHandle = NULL;
-    vTaskDelete(NULL);
 }
 
 // ==============================================================================
@@ -295,10 +273,7 @@ void waveformTask(void *pv) {
 // ============================== SETUP =========================================
 // ==============================================================================
 void setup() {
-    // CAL_LUT sends 1001 floats (~7 KB). The default 512-byte TX buffer silently
-    // drops everything past the first 512 bytes, so the Pi never receives a
-    // complete LUT line. 8192 bytes comfortably holds the full transmission.
-    Serial.setTxBufferSize(8192);
+    Serial.setTxBufferSize(512);
     Serial.begin(500000);   
     delay(500);
     analogSetPinAttenuation(HE1_PIN, ADC_11db);
@@ -344,24 +319,9 @@ void handleCommand(String line) {
         return;
     }
     
-    // Calibration command — runs in a dedicated FreeRTOS task so loop() keeps
-    // yielding to the idle task and the TWDT is never starved.
+    // NEW: Calibration command
     if (target == 'c' || target == 'C') {
-        if (calTaskHandle != NULL) {
-            // Sweep already in progress — ignore duplicate triggers.
-            Serial.println("CAL_BUSY");
-            return;
-        }
-        xTaskCreatePinnedToCore(
-            calibrationTask,   // task function
-            "calibration",     // name (for debugging)
-            8192,              // stack: calPoints[] lives in globals, but Serial
-                               // print formatting needs headroom — 8 KB is safe
-            NULL,              // no parameter
-            5,                 // priority: below waveformTask (10), above idle (0)
-            &calTaskHandle,    // handle stored so we can guard re-entry
-            1                  // Core 1 — same core as loop(); Core 0 owns waveformTask
-        );
+        calibrateMagneticLut();
         return;
     }
 
