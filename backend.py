@@ -9,6 +9,7 @@ import threading
 import subprocess
 import hashlib
 import shutil
+import queue
 import gi
 
 gi.require_version('Aravis', '0.8')
@@ -44,6 +45,7 @@ active_ws = None
 loop = None
 serial_objects = {}
 serial_threads = {}
+serial_write_queues = {}   # well_num -> queue.Queue of (bytes, label); drained by the reader thread
 camera_threads = {}
 stop_events = {}
 camera_settings = {}
@@ -159,6 +161,22 @@ def send_log(well_num, line, level="info"):
     send_ws_sync("log", {"well": well_num, "level": level, "line": line})
 
 
+def write_to_well(well_num, payload: bytes, label: str):
+    """Queue a serial write to be performed by the well's reader thread.
+
+    All writes go through the reader thread so the serial port is only ever
+    touched by ONE thread — writing from the websocket thread while the reader
+    thread is mid-read causes dropped/garbled commands on some USB-serial
+    drivers, which is why a command could "send" yet never reach the firmware.
+    """
+    q = serial_write_queues.get(well_num)
+    if q is None:
+        send_log(well_num, f"Cannot send {label}: well {well_num} is not connected.", "error")
+        return False
+    q.put((payload, label))
+    return True
+
+
 def flash_port(port, log=None):
     """Compile (cached) then upload to `port`. Returns (ok, message).
     `log` is an optional callable(level, line) for step-by-step progress."""
@@ -216,6 +234,8 @@ def serial_reader_loop(well_num, port, stop_event):
         # Match the ESP32's 500000 baud rate (firmware is set to 500000)
         ser = serial.Serial(port, 500000, timeout=0.1)
         serial_objects[well_num] = ser
+        wq = queue.Queue()
+        serial_write_queues[well_num] = wq
         send_log(well_num, f"Serial port {port} opened @ 500000 baud — awaiting data…", "ok")
         buf = ""
         last_data = time.time()
@@ -223,6 +243,16 @@ def serial_reader_loop(well_num, port, stop_event):
         total_lines = 0
 
         while not stop_event.is_set():
+            # --- Outbound: drain any queued commands (single-threaded writes) ---
+            try:
+                while True:
+                    payload, label = wq.get_nowait()
+                    ser.write(payload)
+                    ser.flush()
+                    send_log(well_num, f"→ sent {label} — {len(payload)} bytes to {port}", "info")
+            except queue.Empty:
+                pass
+
             data = ser.read(512).decode(errors='ignore')
             if data:
                 if warned_silent:
@@ -249,6 +279,12 @@ def serial_reader_loop(well_num, port, stop_event):
                     elif line == "CAL_START":
                         send_ws_sync("cal_status", {"well": well_num, "status": "running"})
                         send_log(well_num, "CAL_START — calibration sweep underway", "info")
+                    elif line.startswith("CAL_PT "):
+                        try:
+                            _, pwm_s, g_s = line.split()
+                            send_log(well_num, f"Cal point — PWM {float(pwm_s):.1f}% → {float(g_s):.3f} G", "info")
+                        except ValueError:
+                            send_ws_sync("log", {"well": well_num, "level": "raw", "line": line})
                     elif line == "CAL_END":
                         send_ws_sync("cal_status", {"well": well_num, "status": "done"})
                         send_log(well_num, "CAL_END — calibration sequence complete", "ok")
@@ -289,6 +325,7 @@ def serial_reader_loop(well_num, port, stop_event):
         send_ws_sync("error", {"well": well_num, "msg": str(e)})
     finally:
         if well_num in serial_objects: del serial_objects[well_num]
+        serial_write_queues.pop(well_num, None)
         if ser and ser.is_open: ser.close()
         send_log(well_num, f"Serial port {port} closed.", "info")
 
@@ -437,40 +474,28 @@ async def websocket_endpoint(websocket: WebSocket):
                     
                 elif cmd == "set":
                     well = data.get("well")
-                    if well in serial_objects and serial_objects[well].is_open:
-                        try:
-                            # Extract translated PWM and channel from frontend
-                            channel = data.get("channel") # 'h' (Helmholtz) or 'e' (Electrode)
-                            pwm = data.get("pwm", 0.0)    # 0.0 to 100.0
-                            mode = data.get("mode", 1)    # Default to STEP (1)
-                            freq = data.get("freq", 10.0) # Default to 10 Hz
-                            
-                            if channel in ('h', 'e'):
-                                # Format for ESP32: <target> <mode> <amp%> <freq>
-                                cmd_str = f"{channel} {mode} {pwm:.2f} {freq:.2f}\n"
-                                serial_objects[well].write(cmd_str.encode())
-                                
-                        except Exception as e:
-                            send_ws_sync("error", {"well": well, "msg": str(e)})
-                            
+                    channel = data.get("channel")   # 'h' (Helmholtz) or 'e' (Electrode)
+                    pwm = data.get("pwm", 0.0)       # 0.0 to 100.0
+                    mode = data.get("mode", 1)       # Default to STEP (1)
+                    freq = data.get("freq", 10.0)    # Default to 10 Hz
+                    if channel in ('h', 'e'):
+                        # Format for ESP32: <target> <mode> <amp%> <freq>
+                        cmd_str = f"{channel} {mode} {pwm:.2f} {freq:.2f}\n"
+                        write_to_well(well, cmd_str.encode(),
+                                      f"set[{channel}] mode={mode} amp={pwm:.2f}% freq={freq:.2f}Hz")
+
                 elif cmd == "stop":
                     well = data.get("well")
-                    if well in serial_objects and serial_objects[well].is_open:
-                        try:
-                            # Send OFF command (mode 0, 0% PWM) for both channels
-                            serial_objects[well].write(b"e 0 0.00 10.00\n")
-                            serial_objects[well].write(b"h 0 0.00 10.00\n")
-                        except Exception as e:
-                            send_ws_sync("error", {"well": well, "msg": str(e)})
+                    # well may be a specific number, or 'all' (global E-STOP)
+                    targets = list(serial_write_queues.keys()) if well == "all" else [well]
+                    for wn in targets:
+                        write_to_well(wn, b"e 0 0.00 10.00\n", "stop electrode")
+                        write_to_well(wn, b"h 0 0.00 10.00\n", "stop helmholtz")
 
                 elif cmd == "zero":
-                    # Optional: Trigger the ESP32's auto-zero calibration
+                    # Trigger the ESP32's auto-zero routine
                     well = data.get("well")
-                    if well in serial_objects and serial_objects[well].is_open:
-                        try:
-                            serial_objects[well].write(b"z\n")
-                        except Exception as e:
-                            send_ws_sync("error", {"well": well, "msg": str(e)})
+                    write_to_well(well, b"z\n", "auto-zero (z)")
                         
                 elif cmd == "start_camera":
                     well, cam_id = data["well"], data["id"]
@@ -492,11 +517,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 elif cmd == "calibrate":
                     well = data.get("well")
-                    if well in serial_objects and serial_objects[well].is_open:
-                        try:
-                            serial_objects[well].write(b"c\n")
-                        except Exception as e:
-                            send_ws_sync("error", {"well": well, "msg": str(e)})
+                    write_to_well(well, b"c\n", "calibrate (c)")
 
     except WebSocketDisconnect:
         print("UI disconnected")
