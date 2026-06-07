@@ -170,10 +170,12 @@ void autoZero(int samples = 600) {
 // --- Calibration Helpers ---
 float measureGaussAtPwm(float pwmPercent) {
     int pwmVal = (int)((pwmPercent / 100.0) * PWM_MAX_VALUE);
-    ledcWrite(HELM_IN1_PIN, pwmVal);
+
+    // Actively hold IN2=0 while writing IN1=pwmVal, matching exactly what
+    // waveformTask does via applyBipolarPWM — some H-bridge drivers float
+    // or disable if IN2 is not being continuously driven.
     ledcWrite(HELM_IN2_PIN, 0);
-    // Seed the last-state tracker so waveformTask's change-detect sees
-    // newPwm1(0) == lastHelmPwm1(pwmVal) as a match and skips the write.
+    ledcWrite(HELM_IN1_PIN, pwmVal);
     lastHelmPwm1 = pwmVal;
     lastHelmPwm2 = 0;
 
@@ -182,10 +184,19 @@ float measureGaussAtPwm(float pwmPercent) {
     Serial.print(" IN1="); Serial.print(pwmVal);
     Serial.println(" IN2=0");
 
-    delay(800); // settle
+    // Re-assert both pins every 10ms during settle so IN2 never floats
+    int settleMs = 2000;
+    for (int t = 0; t < settleMs; t += 10) {
+        ledcWrite(HELM_IN2_PIN, 0);
+        ledcWrite(HELM_IN1_PIN, pwmVal);
+        delay(10);
+    }
 
     long sum1 = 0;
     for (int i = 0; i < 400; i++) {
+        // Keep driving the coil during sampling
+        ledcWrite(HELM_IN2_PIN, 0);
+        ledcWrite(HELM_IN1_PIN, pwmVal);
         sum1 += analogRead(HE1_PIN);
         delayMicroseconds(500);
     }
@@ -223,7 +234,23 @@ void calibrateMagneticLut() {
         Serial.println(calPoints[numPoints-1].gauss, 3);
     }
 
-    // Refine until all jumps < 1.0 Gauss
+    // Find the peak Gauss in the coarse sweep and truncate there.
+    // Past the peak the curve rolls over (saturation / driver headroom),
+    // making the PWM→Gauss relationship non-monotonic and non-invertible.
+    // Refinement below the peak catches the real gaps (60–80% region);
+    // without truncation the algorithm wastes iterations on the flat plateau.
+    int peakIdx = 0;
+    for (int i = 1; i < numPoints; i++) {
+        if (calPoints[i].gauss > calPoints[peakIdx].gauss) peakIdx = i;
+    }
+    if (peakIdx < numPoints - 1) {
+        numPoints = peakIdx + 1;
+        Serial.print("CAL_PEAK pwm="); Serial.print(calPoints[peakIdx].pwm);
+        Serial.print(" gauss="); Serial.println(calPoints[peakIdx].gauss, 3);
+        Serial.println("CAL_TRUNCATED (plateau/rolloff discarded)");
+    }
+
+    // Refine until all jumps < 1.0 Gauss, within the monotonic region only
     bool needsRefinement = true;
     while (needsRefinement && numPoints < 900) {
         needsRefinement = false;
@@ -257,17 +284,25 @@ void calibrateMagneticLut() {
         }
     }
 
-    // Interpolate to 0.1% increments (1001 points)
+    // Interpolate to 0.1% increments (1001 points).
+    // LUT only covers 0 → peak PWM%; entries beyond that are clamped to peak Gauss.
+    float peakPwm   = calPoints[numPoints-1].pwm;
+    float peakGauss = calPoints[numPoints-1].gauss;
+
     for (int i = 0; i <= 1000; i++) {
         float targetPwm = i / 10.0;
+        if (targetPwm >= peakPwm) {
+            helmLut[i] = peakGauss;
+            continue;
+        }
         int left = 0, right = numPoints - 1;
-        for (int j = 0; j < numPoints-1; j++) {
+        for (int j = 0; j < numPoints - 1; j++) {
             if (calPoints[j].pwm <= targetPwm && calPoints[j+1].pwm >= targetPwm) {
                 left = j; right = j+1; break;
             }
         }
-        float pwmRange   = calPoints[right].pwm   - calPoints[left].pwm;
-        float gaussRange = calPoints[right].gauss  - calPoints[left].gauss;
+        float pwmRange   = calPoints[right].pwm  - calPoints[left].pwm;
+        float gaussRange = calPoints[right].gauss - calPoints[left].gauss;
         float ratio = (pwmRange == 0) ? 0 : (targetPwm - calPoints[left].pwm) / pwmRange;
         helmLut[i] = calPoints[left].gauss + ratio * gaussRange;
     }
