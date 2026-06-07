@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <math.h>
-#include <esp_task_wdt.h>
 
 // ==============================================================================
 // ======================== CONFIGURATION & CONSTANTS ===========================
@@ -12,11 +11,11 @@ const int ELEC_IN2_PIN = 22;
 const int HE1_PIN = 34;        
 const int HE2_PIN = 35;        
 
-const int HELM_PWM_FREQ_HZ   = 20000;
-const int ELEC_PWM_FREQ_HZ   = 20000;
+const int HELM_PWM_FREQ_HZ    = 20000;
+const int ELEC_PWM_FREQ_HZ    = 20000;
 const int PWM_RESOLUTION_BITS = 10;
-const int PWM_MAX_VALUE       = (1 << PWM_RESOLUTION_BITS) - 1; 
-const int DEAD_TIME_US = 2;
+const int PWM_MAX_VALUE       = (1 << PWM_RESOLUTION_BITS) - 1;
+const int DEAD_TIME_US        = 2;
 
 const unsigned long HELM_SAMPLE_INTERVAL_US = 1000000UL / HELM_PWM_FREQ_HZ;
 const unsigned long ELEC_SAMPLE_INTERVAL_US = 1000000UL / ELEC_PWM_FREQ_HZ;
@@ -25,13 +24,13 @@ const float ADC_VREF       = 3.3;
 const float ADC_RESOLUTION = 4095.0;
 
 const float SENSOR_S5_V_PER_GAUSS = 0.010;
-const float COUNTS_PER_GAUSS = (SENSOR_S5_V_PER_GAUSS / 5.0) * ADC_RESOLUTION; 
+const float COUNTS_PER_GAUSS = (SENSOR_S5_V_PER_GAUSS / 5.0) * ADC_RESOLUTION;
 
-float he1ZeroOffset = 2047.5; 
-float he2ZeroOffset = 2047.5; 
+float he1ZeroOffset = 2047.5;
+float he2ZeroOffset = 2047.5;
 
 const unsigned long HE_SAMPLE_RATE_HZ     = 2000;
-const unsigned long HE_SAMPLE_INTERVAL_US = 1000000UL / HE_SAMPLE_RATE_HZ; 
+const unsigned long HE_SAMPLE_INTERVAL_US = 1000000UL / HE_SAMPLE_RATE_HZ;
 
 const float HELM_MIN_FREQ_HZ = 0.1;
 const float HELM_MAX_FREQ_HZ = 250.0;
@@ -53,6 +52,7 @@ volatile float         elecFreqHz      = 10.0;
 volatile float         elecAmpPercent  = 0.0;
 volatile unsigned long elecWaveStartUs = 0;
 
+// These are only written by waveformTask (Core 0) so no mux needed for them.
 int lastHelmPwm1 = 0;
 int lastHelmPwm2 = 0;
 int lastElecPwm1 = 0;
@@ -70,24 +70,6 @@ Point calPoints[1000];
 bool isCalibrating = false;
 float helmLut[1001];
 bool lutCalibrated = false;
-
-// ==============================================================================
-// ============================== WDT SUPPRESS HELPERS ==========================
-// ==============================================================================
-// analogRead() on ESP-IDF v5 internally calls esp_task_wdt_reset(). If the
-// calling task is not registered with the TWDT it logs "task not found" for
-// every single ADC sample. The WDT itself is disabled (no timeout fires), but
-// the log spam still occurs. Registering the task before bulk ADC sampling and
-// unregistering after silences it without re-enabling any timeout.
-
-void wdtRegister() {
-    esp_task_wdt_add(NULL);   // register calling task — suppresses "task not found"
-}
-
-void wdtUnregister() {
-    esp_task_wdt_reset();     // one final reset so unregister doesn't log a warning
-    esp_task_wdt_delete(NULL);
-}
 
 // ==============================================================================
 // ============================== HELPER FUNCTIONS ==============================
@@ -139,128 +121,162 @@ float processHallSensor(int pin, float offset) {
     return ((float)raw - offset) / COUNTS_PER_GAUSS;
 }
 
-void autoZero(int samples = 600) {
-    if (waveTaskHandle) vTaskSuspend(waveTaskHandle);
+// Stop all output safely without touching waveformTask's scheduling.
+// Sets both waveforms to WAVE_OFF under the mux so waveformTask writes
+// zero duty on its very next tick (<=50us at 20kHz), then forces the
+// LEDC registers to zero immediately so there is no residual pulse.
+void stopAllOutput() {
+    portENTER_CRITICAL(&paramMux);
+    helmWaveform = WAVE_OFF;
+    elecWaveform = WAVE_OFF;
+    portEXIT_CRITICAL(&paramMux);
+    // Force immediate zero — waveformTask will also write zero on next tick
+    // but this guarantees it is already off before ADC sampling begins.
     ledcWrite(HELM_IN1_PIN, 0); ledcWrite(HELM_IN2_PIN, 0);
     ledcWrite(ELEC_IN1_PIN, 0); ledcWrite(ELEC_IN2_PIN, 0);
-    lastHelmPwm1 = 0; lastHelmPwm2 = 0;
-    lastElecPwm1 = 0; lastElecPwm2 = 0;
-    delay(100);
+}
+
+void autoZero(int samples = 600) {
+    // Do NOT suspend waveformTask. Suspending a task that is registered
+    // (or auto-registered) with the TWDT causes "task not found" spam
+    // because the suspended task can no longer reset the watchdog.
+    // Instead, signal WAVE_OFF through the mux and zero the outputs
+    // directly — waveformTask keeps running and writing zero harmlessly.
+    stopAllOutput();
+    delay(100); // let any residual field decay
 
     long sum1 = 0, sum2 = 0;
-    wdtRegister();
     for (int i = 0; i < samples; i++) {
         sum1 += analogRead(HE1_PIN);
         sum2 += analogRead(HE2_PIN);
         delayMicroseconds(200);
     }
-    wdtUnregister();
-
     he1ZeroOffset = (float)sum1 / samples;
     he2ZeroOffset = (float)sum2 / samples;
 
     Serial.println("--- Auto-Zero Complete ---");
     Serial.print("HE1 Offset Counts: "); Serial.println(he1ZeroOffset);
     Serial.print("HE2 Offset Counts: "); Serial.println(he2ZeroOffset);
-    if (waveTaskHandle) vTaskResume(waveTaskHandle);
 }
 
 // --- Calibration Helpers ---
 float measureGaussAtPwm(float pwmPercent) {
-    float duty = (pwmPercent / 100.0) * PWM_MAX_VALUE;
-    applyBipolarPWM(HELM_IN1_PIN, HELM_IN2_PIN, duty, lastHelmPwm1, lastHelmPwm2, HELM_PWM_FREQ_HZ);
-    delay(300); 
-    
+    // Drive the Helmholtz coil directly via ledcWrite rather than going
+    // through applyBipolarPWM, because waveformTask is still running and
+    // will overwrite any value applyBipolarPWM sets on its next tick.
+    // We hold WAVE_OFF in the mux so waveformTask computes duty=0 and
+    // calls applyBipolarPWM(0), which only writes if the value changed —
+    // so as long as we seed lastHelmPwm1/2 correctly it stays silent.
+    int pwmVal = (int)((pwmPercent / 100.0) * PWM_MAX_VALUE);
+    ledcWrite(HELM_IN1_PIN, pwmVal);
+    ledcWrite(HELM_IN2_PIN, 0);
+    // Seed the last-state tracker so waveformTask's zero-write is a no-op.
+    lastHelmPwm1 = pwmVal;
+    lastHelmPwm2 = 0;
+
+    delay(300); // settle
+
     long sum1 = 0;
-    int samples = 400;
-    wdtRegister();
-    for(int i = 0; i < samples; i++) {
+    for (int i = 0; i < 400; i++) {
         sum1 += analogRead(HE1_PIN);
         delayMicroseconds(500);
     }
-    wdtUnregister();
-    
-    float rawAvg = (float)sum1 / samples;
+
+    float rawAvg = (float)sum1 / 400;
     return (rawAvg - he1ZeroOffset) / COUNTS_PER_GAUSS;
 }
 
 void calibrateMagneticLut() {
-    if (waveTaskHandle) vTaskSuspend(waveTaskHandle);
+    // Do NOT suspend waveformTask — see autoZero() comment above.
+    // stopAllOutput() sets WAVE_OFF so waveformTask writes zero duty,
+    // then measureGaussAtPwm() drives the coil directly via ledcWrite.
+    stopAllOutput();
     isCalibrating = true;
-    
+
     ledcWrite(ELEC_IN1_PIN, 0); ledcWrite(ELEC_IN2_PIN, 0);
     Serial.println("CAL_START");
-    
+
     int numPoints = 0;
     float coarse[] = {0.0, 20.0, 40.0, 60.0, 80.0, 100.0};
-    for(int i = 0; i < 6; i++) {
-        calPoints[numPoints].pwm = coarse[i];
+    for (int i = 0; i < 6; i++) {
+        calPoints[numPoints].pwm   = coarse[i];
         calPoints[numPoints].gauss = measureGaussAtPwm(coarse[i]);
         numPoints++;
-        Serial.print("CAL_PT "); Serial.print(coarse[i]); Serial.print(" "); Serial.println(calPoints[numPoints-1].gauss, 3);
+        Serial.print("CAL_PT ");
+        Serial.print(coarse[i]);
+        Serial.print(" ");
+        Serial.println(calPoints[numPoints-1].gauss, 3);
     }
-    
+
     // Refine until all jumps < 1.0 Gauss
     bool needsRefinement = true;
-    while(needsRefinement && numPoints < 900) {
+    while (needsRefinement && numPoints < 900) {
         needsRefinement = false;
         int insertIdx = -1;
         float maxDiff = 0;
-        
-        for(int i = 0; i < numPoints-1; i++) {
+
+        for (int i = 0; i < numPoints-1; i++) {
             float diff = abs(calPoints[i+1].gauss - calPoints[i].gauss);
-            if(diff >= 1.0 && diff > maxDiff) {
+            if (diff >= 1.0 && diff > maxDiff) {
                 maxDiff = diff;
                 insertIdx = i;
                 needsRefinement = true;
             }
         }
-        
-        if(needsRefinement && insertIdx != -1) {
-            float midPwm = (calPoints[insertIdx].pwm + calPoints[insertIdx+1].pwm) / 2.0;
+
+        if (needsRefinement && insertIdx != -1) {
+            float midPwm   = (calPoints[insertIdx].pwm   + calPoints[insertIdx+1].pwm)   / 2.0;
             float midGauss = measureGaussAtPwm(midPwm);
-            
-            for(int i = numPoints; i > insertIdx+1; i--) {
+
+            for (int i = numPoints; i > insertIdx+1; i--) {
                 calPoints[i] = calPoints[i-1];
             }
-            calPoints[insertIdx+1].pwm = midPwm;
+            calPoints[insertIdx+1].pwm   = midPwm;
             calPoints[insertIdx+1].gauss = midGauss;
             numPoints++;
-            
-            Serial.print("CAL_PT "); Serial.print(midPwm); Serial.print(" "); Serial.println(midGauss, 3);
+
+            Serial.print("CAL_PT ");
+            Serial.print(midPwm);
+            Serial.print(" ");
+            Serial.println(midGauss, 3);
         }
     }
-    
+
     // Interpolate to 0.1% increments (1001 points)
-    for(int i = 0; i <= 1000; i++) {
+    for (int i = 0; i <= 1000; i++) {
         float targetPwm = i / 10.0;
         int left = 0, right = numPoints - 1;
-        for(int j = 0; j < numPoints-1; j++) {
-            if(calPoints[j].pwm <= targetPwm && calPoints[j+1].pwm >= targetPwm) {
+        for (int j = 0; j < numPoints-1; j++) {
+            if (calPoints[j].pwm <= targetPwm && calPoints[j+1].pwm >= targetPwm) {
                 left = j; right = j+1; break;
             }
         }
-        float pwmRange = calPoints[right].pwm - calPoints[left].pwm;
-        float gaussRange = calPoints[right].gauss - calPoints[left].gauss;
+        float pwmRange   = calPoints[right].pwm   - calPoints[left].pwm;
+        float gaussRange = calPoints[right].gauss  - calPoints[left].gauss;
         float ratio = (pwmRange == 0) ? 0 : (targetPwm - calPoints[left].pwm) / pwmRange;
         helmLut[i] = calPoints[left].gauss + ratio * gaussRange;
     }
-    
+
     lutCalibrated = true;
-    
+
     Serial.print("CAL_LUT ");
-    for(int i = 0; i <= 1000; i++) {
+    for (int i = 0; i <= 1000; i++) {
         Serial.print(helmLut[i], 3);
-        if(i < 1000) Serial.print(",");
+        if (i < 1000) Serial.print(",");
     }
     Serial.println();
     Serial.flush();
     Serial.println("CAL_END");
     Serial.flush();
-    
-    applyBipolarPWM(HELM_IN1_PIN, HELM_IN2_PIN, 0, lastHelmPwm1, lastHelmPwm2, HELM_PWM_FREQ_HZ);
+
+    // Return coil to zero via the mux path so waveformTask's state is clean.
+    portENTER_CRITICAL(&paramMux);
+    helmWaveform = WAVE_OFF;
+    portEXIT_CRITICAL(&paramMux);
+    ledcWrite(HELM_IN1_PIN, 0); ledcWrite(HELM_IN2_PIN, 0);
+    lastHelmPwm1 = 0; lastHelmPwm2 = 0;
+
     isCalibrating = false;
-    if (waveTaskHandle) vTaskResume(waveTaskHandle);
 }
 
 void calibrationTask(void *pv) {
@@ -303,15 +319,9 @@ void waveformTask(void *pv) {
 // ==============================================================================
 void setup() {
     Serial.setTxBufferSize(8192);
-    Serial.begin(500000);   
+    Serial.begin(500000);
     delay(500);
 
-    // Disable watchdog timers on both cores permanently.
-    // Core 0: waveformTask is a tight busy-loop that never yields.
-    // Core 1: autoZero() and measureGaussAtPwm() use delayMicroseconds()
-    // busy-waits that starve the idle task.
-    // The TWDT is still initialised by the IDF (needed for esp_task_wdt_add),
-    // but with both core idle tasks unsubscribed it will never fire.
     disableCore0WDT();
     disableCore1WDT();
 
@@ -350,14 +360,11 @@ void handleCommand(String line) {
     char target = line.charAt(0);
 
     if (target == 'z' || target == 'Z') {
-        portENTER_CRITICAL(&paramMux);
-        helmWaveform = WAVE_OFF; elecWaveform = WAVE_OFF;
-        portEXIT_CRITICAL(&paramMux);
         autoZero();
         prevHeSampleUs = micros();
         return;
     }
-    
+
     if (target == 'c' || target == 'C') {
         if (calTaskHandle != NULL) {
             Serial.println("CAL_BUSY");
@@ -387,7 +394,7 @@ void handleCommand(String line) {
         int sp3 = rest.indexOf(' ');
         if (sp3 != -1) freq = rest.substring(sp3 + 1).toFloat();
     }
-    unsigned long startUs = micros(); 
+    unsigned long startUs = micros();
 
     if (target == 'h' || target == 'H') {
         portENTER_CRITICAL(&paramMux);
@@ -416,7 +423,7 @@ void loop() {
     unsigned long nowUs = micros();
     if (nowUs - prevHeSampleUs >= HE_SAMPLE_INTERVAL_US) {
         prevHeSampleUs = nowUs;
-        
+
         if (!isCalibrating) {
             float he1Inst = processHallSensor(HE1_PIN, he1ZeroOffset);
             float he2Inst = processHallSensor(HE2_PIN, he2ZeroOffset);
@@ -441,7 +448,7 @@ void loop() {
         } else if (cmdLen < (int)sizeof(cmdBuf) - 1) {
             cmdBuf[cmdLen++] = c;
         } else {
-            cmdLen = 0; 
+            cmdLen = 0;
         }
     }
 }
