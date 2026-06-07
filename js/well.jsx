@@ -376,7 +376,7 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
 
   const status = isE ? well.electricStatus : well.magneticStatus;
   const title  = isE ? 'Electric Field' : 'Magnetic Field';
-  const filter = isE ? 'voltage' : 'gauss';
+  const filter = null; // raw lines have no keyword labels — don't filter them out
 
   const readouts = isE ? (
     <React.Fragment>
