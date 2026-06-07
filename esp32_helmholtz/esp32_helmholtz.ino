@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <math.h>
+#include <esp_task_wdt.h>
 
 // ==============================================================================
 // ======================== CONFIGURATION & CONSTANTS ===========================
@@ -71,6 +72,24 @@ float helmLut[1001];
 bool lutCalibrated = false;
 
 // ==============================================================================
+// ============================== WDT SUPPRESS HELPERS ==========================
+// ==============================================================================
+// analogRead() on ESP-IDF v5 internally calls esp_task_wdt_reset(). If the
+// calling task is not registered with the TWDT it logs "task not found" for
+// every single ADC sample. The WDT itself is disabled (no timeout fires), but
+// the log spam still occurs. Registering the task before bulk ADC sampling and
+// unregistering after silences it without re-enabling any timeout.
+
+void wdtRegister() {
+    esp_task_wdt_add(NULL);   // register calling task — suppresses "task not found"
+}
+
+void wdtUnregister() {
+    esp_task_wdt_reset();     // one final reset so unregister doesn't log a warning
+    esp_task_wdt_delete(NULL);
+}
+
+// ==============================================================================
 // ============================== HELPER FUNCTIONS ==============================
 // ==============================================================================
 void applyBipolarPWM(int pin1, int pin2, float dutyBipolar, int &lastPwm1, int &lastPwm2, int freqHz) {
@@ -129,11 +148,14 @@ void autoZero(int samples = 600) {
     delay(100);
 
     long sum1 = 0, sum2 = 0;
+    wdtRegister();
     for (int i = 0; i < samples; i++) {
         sum1 += analogRead(HE1_PIN);
         sum2 += analogRead(HE2_PIN);
         delayMicroseconds(200);
     }
+    wdtUnregister();
+
     he1ZeroOffset = (float)sum1 / samples;
     he2ZeroOffset = (float)sum2 / samples;
 
@@ -151,10 +173,12 @@ float measureGaussAtPwm(float pwmPercent) {
     
     long sum1 = 0;
     int samples = 400;
+    wdtRegister();
     for(int i = 0; i < samples; i++) {
         sum1 += analogRead(HE1_PIN);
         delayMicroseconds(500);
     }
+    wdtUnregister();
     
     float rawAvg = (float)sum1 / samples;
     return (rawAvg - he1ZeroOffset) / COUNTS_PER_GAUSS;
@@ -239,9 +263,6 @@ void calibrateMagneticLut() {
     if (waveTaskHandle) vTaskResume(waveTaskHandle);
 }
 
-// Calibration runs as a pinned FreeRTOS task on Core 1.
-// Both core WDTs are disabled at startup so no watchdog management
-// is needed here.
 void calibrationTask(void *pv) {
     calibrateMagneticLut();
     calTaskHandle = NULL;
@@ -285,11 +306,12 @@ void setup() {
     Serial.begin(500000);   
     delay(500);
 
-    // Disable watchdog timers on both cores unconditionally.
-    // Core 0 runs waveformTask (tight busy-loop, never yields).
-    // Core 1 runs loop() + autoZero() + calibrationTask, all of which
-    // contain delayMicroseconds() busy-waits that starve the idle task
-    // and will always trigger the TWDT if it is left enabled.
+    // Disable watchdog timers on both cores permanently.
+    // Core 0: waveformTask is a tight busy-loop that never yields.
+    // Core 1: autoZero() and measureGaussAtPwm() use delayMicroseconds()
+    // busy-waits that starve the idle task.
+    // The TWDT is still initialised by the IDF (needed for esp_task_wdt_add),
+    // but with both core idle tasks unsubscribed it will never fire.
     disableCore0WDT();
     disableCore1WDT();
 
