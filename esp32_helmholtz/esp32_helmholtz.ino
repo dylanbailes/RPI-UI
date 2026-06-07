@@ -52,9 +52,12 @@ volatile float         elecFreqHz      = 10.0;
 volatile float         elecAmpPercent  = 0.0;
 volatile unsigned long elecWaveStartUs = 0;
 
-// These are only written by waveformTask (Core 0) so no mux needed for them.
-int lastHelmPwm1 = 0;
-int lastHelmPwm2 = 0;
+// Normally only written by waveformTask (Core 0), but during calibration
+// measureGaussAtPwm() (Core 1) seeds these to suppress waveformTask's
+// change-detect.  volatile ensures Core 0 always reads from memory rather
+// than a cached register value, so the seed is actually visible.
+volatile int lastHelmPwm1 = 0;
+volatile int lastHelmPwm2 = 0;
 int lastElecPwm1 = 0;
 int lastElecPwm2 = 0;
 
@@ -67,14 +70,14 @@ TaskHandle_t calTaskHandle  = NULL;
 // --- Calibration State ---
 struct Point { float pwm; float gauss; };
 Point calPoints[1000];
-volatile bool isCalibrating = false;
+bool isCalibrating = false;
 float helmLut[1001];
 bool lutCalibrated = false;
 
 // ==============================================================================
 // ============================== HELPER FUNCTIONS ==============================
 // ==============================================================================
-void applyBipolarPWM(int pin1, int pin2, float dutyBipolar, int &lastPwm1, int &lastPwm2, int freqHz) {
+void applyBipolarPWM(int pin1, int pin2, float dutyBipolar, volatile int &lastPwm1, volatile int &lastPwm2, int freqHz) {
     if (dutyBipolar >  PWM_MAX_VALUE) dutyBipolar =  PWM_MAX_VALUE;
     if (dutyBipolar < -PWM_MAX_VALUE) dutyBipolar = -PWM_MAX_VALUE;
 
@@ -161,12 +164,16 @@ void autoZero(int samples = 600) {
 
 // --- Calibration Helpers ---
 float measureGaussAtPwm(float pwmPercent) {
-    // waveformTask checks isCalibrating at the top of its loop and skips all
-    // LEDC writes while it is true, so we have exclusive control of the coil
-    // here.  Drive it directly via ledcWrite for the full settle + sample window.
+    // Drive the Helmholtz coil directly via ledcWrite rather than going
+    // through applyBipolarPWM, because waveformTask is still running and
+    // will overwrite any value applyBipolarPWM sets on its next tick.
+    // We hold WAVE_OFF in the mux so waveformTask computes duty=0 and
+    // calls applyBipolarPWM(0), which only writes if the value changed —
+    // so as long as we seed lastHelmPwm1/2 correctly it stays silent.
     int pwmVal = (int)((pwmPercent / 100.0) * PWM_MAX_VALUE);
     ledcWrite(HELM_IN1_PIN, pwmVal);
     ledcWrite(HELM_IN2_PIN, 0);
+    // Seed the last-state tracker so waveformTask's zero-write is a no-op.
     lastHelmPwm1 = pwmVal;
     lastHelmPwm2 = 0;
 
@@ -183,10 +190,9 @@ float measureGaussAtPwm(float pwmPercent) {
 }
 
 void calibrateMagneticLut() {
-    // stopAllOutput() sets WAVE_OFF through the mux so waveformTask computes
-    // duty=0.  isCalibrating is then set to true (volatile), which causes
-    // waveformTask to skip its LEDC writes entirely — so measureGaussAtPwm()
-    // has exclusive control of the coil for the full settle + sample window.
+    // Do NOT suspend waveformTask — see autoZero() comment above.
+    // stopAllOutput() sets WAVE_OFF so waveformTask writes zero duty,
+    // then measureGaussAtPwm() drives the coil directly via ledcWrite.
     stopAllOutput();
     isCalibrating = true;
 
@@ -274,9 +280,6 @@ void calibrateMagneticLut() {
     lastHelmPwm1 = 0; lastHelmPwm2 = 0;
 
     isCalibrating = false;
-
-    // waveformTask resumes normal operation automatically on its next loop
-    // iteration now that isCalibrating is false again.
 }
 
 void calibrationTask(void *pv) {
@@ -292,7 +295,6 @@ void waveformTask(void *pv) {
     unsigned long helmPrev = micros();
     unsigned long elecPrev = micros();
     for (;;) {
-        if (isCalibrating) { vTaskDelay(1); continue; }  // hands off LEDC to calibration
         unsigned long nowUs = micros();
         if (nowUs - helmPrev >= HELM_SAMPLE_INTERVAL_US) {
             helmPrev = nowUs;
