@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <math.h>
-#include <esp_task_wdt.h>
 
 // ==============================================================================
 // ======================== CONFIGURATION & CONSTANTS ===========================
@@ -64,9 +63,9 @@ portMUX_TYPE paramMux = portMUX_INITIALIZER_UNLOCKED;
 TaskHandle_t waveTaskHandle = NULL;
 TaskHandle_t calTaskHandle  = NULL;   // non-NULL while a calibration sweep is running
 
-// --- NEW: Calibration State ---
+// --- Calibration State ---
 struct Point { float pwm; float gauss; };
-Point calPoints[1000]; // Global to avoid stack overflow (8KB)
+Point calPoints[1000]; // Global to avoid stack overflow
 bool isCalibrating = false;
 float helmLut[1001];   // 0.0 to 100.0 in 0.1 steps
 bool lutCalibrated = false;
@@ -92,8 +91,8 @@ void applyBipolarPWM(int pin1, int pin2, float dutyBipolar, int &lastPwm1, int &
     if (newPwm1 != lastPwm1 || newPwm2 != lastPwm2) {
         ledcWrite(pin1, newPwm1);
         ledcWrite(pin2, newPwm2);
-        lastHelmPwm1 = newPwm1;
-        lastHelmPwm2 = newPwm2;
+        lastPwm1 = newPwm1;
+        lastPwm2 = newPwm2;
     }
 }
 
@@ -148,9 +147,6 @@ void autoZero(int samples = 600) {
 float measureGaussAtPwm(float pwmPercent) {
     float duty = (pwmPercent / 100.0) * PWM_MAX_VALUE;
     applyBipolarPWM(HELM_IN1_PIN, HELM_IN2_PIN, duty, lastHelmPwm1, lastHelmPwm2, HELM_PWM_FREQ_HZ);
-    
-    // This delay yields to the FreeRTOS scheduler, allowing the Idle Task 
-    // to run and safely feed the Watchdog Timer automatically.
     delay(300); 
     
     long sum1 = 0;
@@ -159,8 +155,6 @@ float measureGaussAtPwm(float pwmPercent) {
         sum1 += analogRead(HE1_PIN);
         delayMicroseconds(500);
     }
-    
-    // REMOVED: esp_task_wdt_reset(); 
     
     float rawAvg = (float)sum1 / samples;
     return (rawAvg - he1ZeroOffset) / COUNTS_PER_GAUSS;
@@ -232,39 +226,32 @@ void calibrateMagneticLut() {
     
     // Send the full LUT to the host.
     // Serial.flush() after the LUT line guarantees every byte has left the TX
-    // buffer before CAL_END is queued — without it, CAL_END can arrive at the
-    // Pi before the tail of the LUT if the buffer drains asynchronously.
+    // buffer before CAL_END is queued.
     Serial.print("CAL_LUT ");
     for(int i=0; i<=1000; i++) {
         Serial.print(helmLut[i], 3);
         if(i < 1000) Serial.print(",");
     }
     Serial.println();
-    Serial.flush();         // wait for full LUT line to drain before CAL_END
+    Serial.flush();
     Serial.println("CAL_END");
-    Serial.flush();         // ensure CAL_END itself is fully transmitted
+    Serial.flush();
     
     applyBipolarPWM(HELM_IN1_PIN, HELM_IN2_PIN, 0, lastHelmPwm1, lastHelmPwm2, HELM_PWM_FREQ_HZ);
     isCalibrating = false;
     if (waveTaskHandle) vTaskResume(waveTaskHandle);
 }
 
-// FreeRTOS task wrapper so calibration runs off loop(), keeping Core 1's
-// idle task schedulable and the TWDT fed via esp_task_wdt_reset() inside
-// measureGaussAtPwm(). Self-deletes on completion so calTaskHandle going
-// NULL is the reliable "sweep finished" signal.
-//
-// esp_task_wdt_reset() silently fails (logs "task not found") unless the
-// calling task is first subscribed to the TWDT via esp_task_wdt_add(NULL).
-// We subscribe on entry and unsubscribe before deletion so the watchdog
-// never fires on this task regardless of how long the sweep takes.
+// Calibration runs in its own FreeRTOS task on Core 1.
+// Core 1 WDT is disabled for the duration so the long-running sweep
+// (many delay(300) + ADC blocks) never triggers "task not found" spam.
+// Core 1 WDT is re-enabled before the task deletes itself.
 void calibrationTask(void *pv) {
-    // REMOVED: esp_task_wdt_add(NULL);
-    
+    disableCore1WDT();
+
     calibrateMagneticLut();
-    
-    // REMOVED: esp_task_wdt_delete(NULL);
-    
+
+    enableCore1WDT();
     calTaskHandle = NULL;
     vTaskDelete(NULL);
 }
@@ -319,7 +306,12 @@ void setup() {
 
     Serial.println("=== ESP32 Helmholtz/Electrode Driver Ready ===");
     Serial.println("Running auto-zero calibration...");
-    autoZero();  
+
+    // Disable Core 1 WDT around the startup auto-zero since delayMicroseconds()
+    // is a busy-wait that prevents the idle task from resetting the watchdog.
+    disableCore1WDT();
+    autoZero();
+    enableCore1WDT();
 
     unsigned long now = micros();
     helmWaveStartUs = now; elecWaveStartUs = now; prevHeSampleUs = now;
@@ -327,10 +319,10 @@ void setup() {
     xTaskCreatePinnedToCore(waveformTask, "waveform", 4096, NULL, 10, &waveTaskHandle, 0);
 
     Serial.println("Commands:");
-    Serial.println("  h <mode> <amp%> <freq>   — set Helmholtz channel");
-    Serial.println("  e <mode> <amp%> <freq>   — set Electrode channel");
-    Serial.println("  z                        — re-run auto-zero calibration");
-    Serial.println("  c                        — run magnetic field calibration");
+    Serial.println("  h <mode> <amp%> <freq>   - set Helmholtz channel");
+    Serial.println("  e <mode> <amp%> <freq>   - set Electrode channel");
+    Serial.println("  z                        - re-run auto-zero calibration");
+    Serial.println("  c                        - run magnetic field calibration");
     Serial.println("  Modes: 0=OFF 1=STEP 2=SQUARE 3=SINE 4=TRIANGLE");
 }
 
@@ -346,28 +338,30 @@ void handleCommand(String line) {
         portENTER_CRITICAL(&paramMux);
         helmWaveform = WAVE_OFF; elecWaveform = WAVE_OFF;
         portEXIT_CRITICAL(&paramMux);
+        // Disable Core 1 WDT: autoZero() uses delayMicroseconds() (busy-wait)
+        // which prevents the idle task from resetting the watchdog.
+        disableCore1WDT();
         autoZero();
-        prevHeSampleUs = micros();   
+        enableCore1WDT();
+        prevHeSampleUs = micros();
         return;
     }
     
-    // Calibration command — runs in a dedicated FreeRTOS task so loop() keeps
-    // yielding to the idle task and the TWDT is never starved.
+    // Calibration command — runs in a dedicated FreeRTOS task so loop() remains
+    // schedulable. The task itself disables/re-enables the Core 1 WDT internally.
     if (target == 'c' || target == 'C') {
         if (calTaskHandle != NULL) {
-            // Sweep already in progress — ignore duplicate triggers.
             Serial.println("CAL_BUSY");
             return;
         }
         xTaskCreatePinnedToCore(
-            calibrationTask,   // task function
-            "calibration",     // name (for debugging)
-            8192,              // stack: calPoints[] lives in globals, but Serial
-                               // print formatting needs headroom — 8 KB is safe
-            NULL,              // no parameter
-            5,                 // priority: below waveformTask (10), above idle (0)
-            &calTaskHandle,    // handle stored so we can guard re-entry
-            1                  // Core 1 — same core as loop(); Core 0 owns waveformTask
+            calibrationTask,
+            "calibration",
+            8192,
+            NULL,
+            5,
+            &calTaskHandle,
+            1
         );
         return;
     }
@@ -412,7 +406,7 @@ void handleCommand(String line) {
 void loop() {
     unsigned long nowUs = micros();
     if (nowUs - prevHeSampleUs >= HE_SAMPLE_INTERVAL_US) {
-        prevHeSampleUs = nowUs;   
+        prevHeSampleUs = nowUs;
         
         // Pause normal telemetry output while calibrating to keep serial clean
         if (!isCalibrating) {
