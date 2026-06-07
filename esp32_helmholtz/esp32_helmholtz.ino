@@ -61,13 +61,13 @@ unsigned long prevHeSampleUs = 0;
 
 portMUX_TYPE paramMux = portMUX_INITIALIZER_UNLOCKED;
 TaskHandle_t waveTaskHandle = NULL;
-TaskHandle_t calTaskHandle  = NULL;   // non-NULL while a calibration sweep is running
+TaskHandle_t calTaskHandle  = NULL;
 
 // --- Calibration State ---
 struct Point { float pwm; float gauss; };
-Point calPoints[1000]; // Global to avoid stack overflow
+Point calPoints[1000];
 bool isCalibrating = false;
-float helmLut[1001];   // 0.0 to 100.0 in 0.1 steps
+float helmLut[1001];
 bool lutCalibrated = false;
 
 // ==============================================================================
@@ -151,7 +151,7 @@ float measureGaussAtPwm(float pwmPercent) {
     
     long sum1 = 0;
     int samples = 400;
-    for(int i=0; i<samples; i++) {
+    for(int i = 0; i < samples; i++) {
         sum1 += analogRead(HE1_PIN);
         delayMicroseconds(500);
     }
@@ -169,7 +169,7 @@ void calibrateMagneticLut() {
     
     int numPoints = 0;
     float coarse[] = {0.0, 20.0, 40.0, 60.0, 80.0, 100.0};
-    for(int i=0; i<6; i++) {
+    for(int i = 0; i < 6; i++) {
         calPoints[numPoints].pwm = coarse[i];
         calPoints[numPoints].gauss = measureGaussAtPwm(coarse[i]);
         numPoints++;
@@ -183,7 +183,7 @@ void calibrateMagneticLut() {
         int insertIdx = -1;
         float maxDiff = 0;
         
-        for(int i=0; i<numPoints-1; i++) {
+        for(int i = 0; i < numPoints-1; i++) {
             float diff = abs(calPoints[i+1].gauss - calPoints[i].gauss);
             if(diff >= 1.0 && diff > maxDiff) {
                 maxDiff = diff;
@@ -196,7 +196,7 @@ void calibrateMagneticLut() {
             float midPwm = (calPoints[insertIdx].pwm + calPoints[insertIdx+1].pwm) / 2.0;
             float midGauss = measureGaussAtPwm(midPwm);
             
-            for(int i=numPoints; i>insertIdx+1; i--) {
+            for(int i = numPoints; i > insertIdx+1; i--) {
                 calPoints[i] = calPoints[i-1];
             }
             calPoints[insertIdx+1].pwm = midPwm;
@@ -207,11 +207,11 @@ void calibrateMagneticLut() {
         }
     }
     
-    // Interpolate to 0.1 increments (1001 points)
-    for(int i=0; i<=1000; i++) {
+    // Interpolate to 0.1% increments (1001 points)
+    for(int i = 0; i <= 1000; i++) {
         float targetPwm = i / 10.0;
         int left = 0, right = numPoints - 1;
-        for(int j=0; j<numPoints-1; j++) {
+        for(int j = 0; j < numPoints-1; j++) {
             if(calPoints[j].pwm <= targetPwm && calPoints[j+1].pwm >= targetPwm) {
                 left = j; right = j+1; break;
             }
@@ -224,11 +224,8 @@ void calibrateMagneticLut() {
     
     lutCalibrated = true;
     
-    // Send the full LUT to the host.
-    // Serial.flush() after the LUT line guarantees every byte has left the TX
-    // buffer before CAL_END is queued.
     Serial.print("CAL_LUT ");
-    for(int i=0; i<=1000; i++) {
+    for(int i = 0; i <= 1000; i++) {
         Serial.print(helmLut[i], 3);
         if(i < 1000) Serial.print(",");
     }
@@ -242,16 +239,11 @@ void calibrateMagneticLut() {
     if (waveTaskHandle) vTaskResume(waveTaskHandle);
 }
 
-// Calibration runs in its own FreeRTOS task on Core 1.
-// Core 1 WDT is disabled for the duration so the long-running sweep
-// (many delay(300) + ADC blocks) never triggers "task not found" spam.
-// Core 1 WDT is re-enabled before the task deletes itself.
+// Calibration runs as a pinned FreeRTOS task on Core 1.
+// Both core WDTs are disabled at startup so no watchdog management
+// is needed here.
 void calibrationTask(void *pv) {
-    disableCore1WDT();
-
     calibrateMagneticLut();
-
-    enableCore1WDT();
     calTaskHandle = NULL;
     vTaskDelete(NULL);
 }
@@ -289,12 +281,18 @@ void waveformTask(void *pv) {
 // ============================== SETUP =========================================
 // ==============================================================================
 void setup() {
-    // CAL_LUT sends 1001 floats (~7 KB). The default 512-byte TX buffer silently
-    // drops everything past the first 512 bytes, so the Pi never receives a
-    // complete LUT line. 8192 bytes comfortably holds the full transmission.
     Serial.setTxBufferSize(8192);
     Serial.begin(500000);   
     delay(500);
+
+    // Disable watchdog timers on both cores unconditionally.
+    // Core 0 runs waveformTask (tight busy-loop, never yields).
+    // Core 1 runs loop() + autoZero() + calibrationTask, all of which
+    // contain delayMicroseconds() busy-waits that starve the idle task
+    // and will always trigger the TWDT if it is left enabled.
+    disableCore0WDT();
+    disableCore1WDT();
+
     analogSetPinAttenuation(HE1_PIN, ADC_11db);
     analogSetPinAttenuation(HE2_PIN, ADC_11db);
     ledcAttach(HELM_IN1_PIN, HELM_PWM_FREQ_HZ, PWM_RESOLUTION_BITS);
@@ -306,16 +304,11 @@ void setup() {
 
     Serial.println("=== ESP32 Helmholtz/Electrode Driver Ready ===");
     Serial.println("Running auto-zero calibration...");
-
-    // Disable Core 1 WDT around the startup auto-zero since delayMicroseconds()
-    // is a busy-wait that prevents the idle task from resetting the watchdog.
-    disableCore1WDT();
     autoZero();
-    enableCore1WDT();
 
     unsigned long now = micros();
     helmWaveStartUs = now; elecWaveStartUs = now; prevHeSampleUs = now;
-    disableCore0WDT();
+
     xTaskCreatePinnedToCore(waveformTask, "waveform", 4096, NULL, 10, &waveTaskHandle, 0);
 
     Serial.println("Commands:");
@@ -338,17 +331,11 @@ void handleCommand(String line) {
         portENTER_CRITICAL(&paramMux);
         helmWaveform = WAVE_OFF; elecWaveform = WAVE_OFF;
         portEXIT_CRITICAL(&paramMux);
-        // Disable Core 1 WDT: autoZero() uses delayMicroseconds() (busy-wait)
-        // which prevents the idle task from resetting the watchdog.
-        disableCore1WDT();
         autoZero();
-        enableCore1WDT();
         prevHeSampleUs = micros();
         return;
     }
     
-    // Calibration command — runs in a dedicated FreeRTOS task so loop() remains
-    // schedulable. The task itself disables/re-enables the Core 1 WDT internally.
     if (target == 'c' || target == 'C') {
         if (calTaskHandle != NULL) {
             Serial.println("CAL_BUSY");
@@ -408,7 +395,6 @@ void loop() {
     if (nowUs - prevHeSampleUs >= HE_SAMPLE_INTERVAL_US) {
         prevHeSampleUs = nowUs;
         
-        // Pause normal telemetry output while calibrating to keep serial clean
         if (!isCalibrating) {
             float he1Inst = processHallSensor(HE1_PIN, he1ZeroOffset);
             float he2Inst = processHallSensor(HE2_PIN, he2ZeroOffset);
