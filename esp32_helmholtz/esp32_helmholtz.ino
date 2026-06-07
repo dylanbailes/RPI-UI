@@ -133,10 +133,15 @@ void stopAllOutput() {
     helmWaveform = WAVE_OFF;
     elecWaveform = WAVE_OFF;
     portEXIT_CRITICAL(&paramMux);
-    // Force immediate zero — waveformTask will also write zero on next tick
-    // but this guarantees it is already off before ADC sampling begins.
+    // Force immediate zero and sync the last-state shadow variables so that
+    // waveformTask's change-detect (newPwm == lastPwm) sees no difference
+    // on its next tick and does not re-write the LEDC registers.  Without
+    // this, measureGaussAtPwm's seed of lastHelmPwm1=pwmVal is immediately
+    // undone because waveformTask computes newPwm1=0 != lastHelmPwm1=pwmVal.
     ledcWrite(HELM_IN1_PIN, 0); ledcWrite(HELM_IN2_PIN, 0);
     ledcWrite(ELEC_IN1_PIN, 0); ledcWrite(ELEC_IN2_PIN, 0);
+    lastHelmPwm1 = 0; lastHelmPwm2 = 0;
+    lastElecPwm1 = 0; lastElecPwm2 = 0;
 }
 
 void autoZero(int samples = 600) {
@@ -164,18 +169,18 @@ void autoZero(int samples = 600) {
 
 // --- Calibration Helpers ---
 float measureGaussAtPwm(float pwmPercent) {
-    // Drive the Helmholtz coil directly via ledcWrite rather than going
-    // through applyBipolarPWM, because waveformTask is still running and
-    // will overwrite any value applyBipolarPWM sets on its next tick.
-    // We hold WAVE_OFF in the mux so waveformTask computes duty=0 and
-    // calls applyBipolarPWM(0), which only writes if the value changed —
-    // so as long as we seed lastHelmPwm1/2 correctly it stays silent.
     int pwmVal = (int)((pwmPercent / 100.0) * PWM_MAX_VALUE);
     ledcWrite(HELM_IN1_PIN, pwmVal);
     ledcWrite(HELM_IN2_PIN, 0);
-    // Seed the last-state tracker so waveformTask's zero-write is a no-op.
+    // Seed the last-state tracker so waveformTask's change-detect sees
+    // newPwm1(0) == lastHelmPwm1(pwmVal) as a match and skips the write.
     lastHelmPwm1 = pwmVal;
     lastHelmPwm2 = 0;
+
+    Serial.print("CAL_PWM pct="); Serial.print(pwmPercent);
+    Serial.print(" pwmVal="); Serial.print(pwmVal);
+    Serial.print(" IN1="); Serial.print(pwmVal);
+    Serial.println(" IN2=0");
 
     delay(800); // settle
 
@@ -186,7 +191,14 @@ float measureGaussAtPwm(float pwmPercent) {
     }
 
     float rawAvg = (float)sum1 / 400;
-    return (rawAvg - he1ZeroOffset) / COUNTS_PER_GAUSS;
+    float gauss  = (rawAvg - he1ZeroOffset) / COUNTS_PER_GAUSS;
+
+    Serial.print("CAL_ADC rawAvg="); Serial.print(rawAvg, 1);
+    Serial.print(" zero="); Serial.print(he1ZeroOffset, 1);
+    Serial.print(" delta="); Serial.print(rawAvg - he1ZeroOffset, 1);
+    Serial.print(" gauss="); Serial.println(gauss, 3);
+
+    return gauss;
 }
 
 void calibrateMagneticLut() {
