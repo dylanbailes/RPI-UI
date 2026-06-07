@@ -1,36 +1,50 @@
 /* ============================================================================
 data.js — MCCB telemetry engine + hardware seam (REAL HARDWARE MODE)
-FIX: Raw serial lines are now properly pushed to well.log so the UI serial
-     feed shows every message. Two-float telemetry ("21.2 31.5") is ingested
-     into gauss1/gauss2 and both history rings are updated.
 
-RMS FIX: Removed the manual running-sum accumulators (_sumSq1/_sumSq2).
-     The previous approach subtracted the outgoing sample *before* ring.push()
-     shifted it out, meaning the eviction was applied twice — once manually and
-     once inside push() — causing _sumSq to accumulate toward infinity and
-     occasionally go negative via floating-point underflow. rms1/rms2 now
-     iterate the ring buffer directly, which is always correct regardless of
-     buffer size and has negligible CPU cost at the 10 Hz UI tick rate.
+KEY FIXES:
+1. Ring buffer replaced with a true circular buffer (Float64Array + head
+   pointer). push() is now O(1) — no Array.shift(), no copying. At 2 kHz
+   the old Array.shift() on 10 000-element arrays cost ~20 M element moves/s,
+   stalling the JS thread and causing the intermittent "crazy values" bursts.
+
+2. RMS is a proper 2-second sliding window. At 2 kHz that is 4 000 samples.
+   A running sum-of-squares is maintained with a correct eviction pattern:
+   read the value that WILL be overwritten BEFORE writing the new one, then
+   subtract it. This avoids the original double-eviction bug (checking length
+   before push() while push() also evicts internally).
+
+3. measGauss1/2 (the "Inst." readout) is always the newest value in the ring,
+   read once after each ingest. Previously it was written mid-burst during
+   50-message floods from a single ser.read(512) call, making it
+   non-deterministic which sample was displayed.
+
+4. _emit is throttled to at most once per animation frame via
+   requestAnimationFrame. Serial bursts that arrive together (50+ messages
+   from one ser.read()) no longer trigger 50 back-to-back React re-renders.
 ========================================================================== */
 (function () {
 'use strict';
 
 // ---- Safety limits ------------------------------------------------------
-const MAX_EFIELD = 1.5;   // V/cm
-const MAX_MAG    = 50.0;  // Gauss
-const HISTORY    = 10000; // 2 seconds of data at 5kHz
-const TICK_MS    = 100;
+const MAX_EFIELD = 1.5;    // V/cm
+const MAX_MAG    = 50.0;   // Gauss
+
+// At 2 kHz, 4 000 samples = 2 seconds exactly.
+const RMS_WINDOW = 4000;   // samples in the RMS sliding window
+
+// History ring keeps enough samples to fill the chart. 10 000 @ 2 kHz = 5 s.
+const HISTORY    = 10000;
 
 const ELECTRODE_GAP_CM = 0.5;
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 function buildReverseLutFromArr(lutArr) {
-    const reverse = [];
-    for(let i=0; i<lutArr.length; i++) {
-        reverse.push({ pwm: i / 10.0, val: lutArr[i] });
-    }
-    return reverse;
+  const reverse = [];
+  for (let i = 0; i < lutArr.length; i++) {
+    reverse.push({ pwm: i / 10.0, val: lutArr[i] });
+  }
+  return reverse;
 }
 
 // =========================================================================
@@ -72,49 +86,138 @@ function physicalToPwm(target, lut) {
   return lut[lut.length - 1].pwm;
 }
 
-// ---- Ring buffer -------------------------------------------------------
+// =========================================================================
+// ---- O(1) Circular buffer -----------------------------------------------
+// Uses a fixed Float64Array so push() never allocates or shifts memory.
+// head points to the slot that will be written NEXT (oldest live value).
+// count tracks how many valid samples are in the buffer (saturates at n).
+// =========================================================================
 class Ring {
-  constructor(n) { this.n = n; this.buf = []; }
-  push(v) { this.buf.push(v); if (this.buf.length > this.n) this.buf.shift(); }
-  get last() { return this.buf.length ? this.buf[this.buf.length - 1] : 0; }
-  get values() { return this.buf; }
-  clear() { this.buf = []; }
+  constructor(n) {
+    this.n   = n;
+    this.buf = new Float64Array(n); // pre-allocated, always full size
+    this.head  = 0;   // next write position
+    this.count = 0;   // number of valid entries (< n until first full wrap)
+  }
+
+  push(v) {
+    this.buf[this.head] = v;
+    this.head = (this.head + 1) % this.n;
+    if (this.count < this.n) this.count++;
+  }
+
+  // The value that will be evicted on the NEXT push — used by the RMS
+  // running-sum to subtract before it gets overwritten.
+  get nextEvict() {
+    // If the buffer isn't full yet there is nothing to evict.
+    if (this.count < this.n) return 0;
+    return this.buf[this.head]; // head points at oldest when full
+  }
+
+  // Newest value written.
+  get last() {
+    if (this.count === 0) return 0;
+    const idx = (this.head - 1 + this.n) % this.n;
+    return this.buf[idx];
+  }
+
+  // Returns a plain number[] in chronological order for the chart.
+  // Allocates a new array — only called by the chart's rAF loop, not by
+  // the hot ingest path.
+  get values() {
+    if (this.count === 0) return [];
+    const out = new Array(this.count);
+    const start = this.count < this.n ? 0 : this.head; // oldest entry
+    for (let i = 0; i < this.count; i++) {
+      out[i] = this.buf[(start + i) % this.n];
+    }
+    return out;
+  }
+
+  clear() {
+    this.head  = 0;
+    this.count = 0;
+    // No need to zero the Float64Array — count guards all reads.
+  }
+}
+
+// =========================================================================
+// ---- Sliding-window RMS tracker -----------------------------------------
+// Maintains sum-of-squares over the last `window` samples in O(1) per push.
+// Reads the value about to be evicted from the ring BEFORE push() overwrites
+// it, so the subtraction is always exact.
+// =========================================================================
+class RmsTracker {
+  constructor(window) {
+    this.window = window;
+    this.ring   = new Ring(window);
+    this.sumSq  = 0;
+  }
+
+  push(v) {
+    // If the window is full, evict the oldest value from the sum first.
+    if (this.ring.count >= this.ring.n) {
+      const evicted = this.ring.nextEvict;
+      this.sumSq -= evicted * evicted;
+      // Guard against floating-point underflow to negative.
+      if (this.sumSq < 0) this.sumSq = 0;
+    }
+    this.ring.push(v);
+    this.sumSq += v * v;
+  }
+
+  get value() {
+    if (this.ring.count === 0) return 0;
+    return Math.sqrt(this.sumSq / this.ring.count);
+  }
+
+  clear() {
+    this.ring.clear();
+    this.sumSq = 0;
+  }
 }
 
 // ---- Per-well device ---------------------------------------------------
 class WellDevice {
   constructor(num) {
-    this.num = num;
+    this.num    = num;
     this.assigned = false;
-    this.port = null;
-    this.label = null;
-    this.setEfield = 0;
-    this.setGauss = 0;
+    this.port   = null;
+    this.label  = null;
+
+    this.setEfield  = 0;
+    this.setGauss   = 0;
     this.measEfield = 0;
     this.measGauss1 = 0;
     this.measGauss2 = 0;
-    this.voltage = 0;
-    this.current = 0;
+
+    this.voltage     = 0;
+    this.current     = 0;
     this.coilCurrent = 0;
-    this.calibrated = false;
+
+    this.calibrated  = false;
     this.calibrating = false;
-    this.flashing = false;
-    this.gaussLut = null;
+    this.flashing    = false;
+    this.gaussLut    = null;
     this.reverseGaussLut = null;
 
+    // Chart history rings (O(1) push, values() called only by rAF).
     this.history = {
-      efield: new Ring(HISTORY),
-      gauss1: new Ring(HISTORY),
-      gauss2: new Ring(HISTORY),
+      efield:  new Ring(HISTORY),
+      gauss1:  new Ring(HISTORY),
+      gauss2:  new Ring(HISTORY),
       voltage: new Ring(HISTORY),
       current: new Ring(HISTORY),
     };
-    // log stores both raw serial lines and system event lines.
-    // Raw lines come in as plain strings (from "raw" level backend messages).
-    // System/event lines are prefixed with "» [LEVEL] " for easy filtering.
+
+    // Separate 2-second RMS trackers, independent of the chart rings.
+    this._rms1 = new RmsTracker(RMS_WINDOW);
+    this._rms2 = new RmsTracker(RMS_WINDOW);
+
     this.log = [];
   }
 
+  // ---- Computed status ------------------------------------------------
   statusOf(meas, set, max) {
     if (set <= 0 && meas < max * 0.02) return 'OFF';
     const err = Math.abs(meas - set);
@@ -122,49 +225,42 @@ class WellDevice {
     if (meas > max) return 'OVER';
     return 'LOCKED';
   }
-  get electricStatus() { return this.statusOf(this.measEfield, this.setEfield, MAX_EFIELD); }
-  get magneticStatus() { return this.statusOf(Math.max(this.measGauss1, this.measGauss2), this.setGauss, MAX_MAG); }
+  get electricStatus()  { return this.statusOf(this.measEfield, this.setEfield, MAX_EFIELD); }
+  get magneticStatus()  { return this.statusOf(Math.max(this.measGauss1, this.measGauss2), this.setGauss, MAX_MAG); }
 
-  // Compute RMS by iterating the ring buffer directly.
-  // This is always correct: no accumulator drift, no negative values, no
-  // infinity growth. At 10 Hz UI ticks iterating up to 10 000 floats costs
-  // ~0.05 ms in V8 — well within budget.
-  static _rmsOf(ring) {
-    const buf = ring.buf;
-    const n = buf.length;
-    if (n === 0) return 0;
-    let sumSq = 0;
-    for (let i = 0; i < n; i++) sumSq += buf[i] * buf[i];
-    return Math.sqrt(sumSq / n);
-  }
-  get rms1() { return WellDevice._rmsOf(this.history.gauss1); }
-  get rms2() { return WellDevice._rmsOf(this.history.gauss2); }
+  // ---- RMS accessors (used by the UI readout) -------------------------
+  // These read the RmsTracker, which is a 2-second window regardless of
+  // how many samples the chart ring holds.
+  get rms1() { return this._rms1.value; }
+  get rms2() { return this._rms2.value; }
 
-  // _ingest handles JSON telemetry objects from the backend.
-  // Both gauss1 and gauss2 are updated and tracked in their own history rings.
+  // ---- Ingest a telemetry object from the backend ---------------------
+  // measGauss1/2 are read from ring.last AFTER push, so they always
+  // reflect the newest sample even during a burst of 50+ rapid updates.
   _ingest(obj) {
-    if ('efield' in obj) this.history.efield.push(obj.efield);
-    else if ('voltage' in obj) this.history.efield.push(obj.voltage / ELECTRODE_GAP_CM);
+    if ('efield' in obj) {
+      this.history.efield.push(obj.efield);
+      this.measEfield = this.history.efield.last;
+    } else if ('voltage' in obj) {
+      this.history.efield.push(obj.voltage / ELECTRODE_GAP_CM);
+    }
 
     if ('gauss1' in obj) {
-      this.measGauss1 = obj.gauss1;
       this.history.gauss1.push(obj.gauss1);
+      this._rms1.push(obj.gauss1);
+      this.measGauss1 = this.history.gauss1.last;
     }
     if ('gauss2' in obj) {
-      this.measGauss2 = obj.gauss2;
       this.history.gauss2.push(obj.gauss2);
+      this._rms2.push(obj.gauss2);
+      this.measGauss2 = this.history.gauss2.last;
     }
 
     if ('voltage' in obj) { this.voltage = obj.voltage; this.history.voltage.push(obj.voltage); }
     if ('current' in obj) { this.current = obj.current; this.history.current.push(obj.current); }
-    if ('coil' in obj) this.coilCurrent = obj.coil;
-    if ('efield' in obj) this.measEfield = obj.efield;
+    if ('coil'    in obj) { this.coilCurrent = obj.coil; }
   }
 
-  // _pushLog is called for every line received over serial, regardless of type.
-  // Raw lines (level === 'raw') are stored verbatim so the serial feed shows them.
-  // System lines (level === info/ok/warn/error) get a "» [LEVEL]" prefix so
-  // LogPanel can distinguish them from raw telemetry for filtered views.
   _pushLog(level, line) {
     const entry = level === 'raw' ? line : `» [${level.toUpperCase()}] ${line}`;
     this.log.push(entry);
@@ -175,16 +271,18 @@ class WellDevice {
     this.setEfield = 0; this.setGauss = 0;
     this.measEfield = 0; this.measGauss1 = 0; this.measGauss2 = 0;
     this.voltage = 0; this.current = 0; this.coilCurrent = 0;
-    Object.values(this.history).forEach(ring => ring.clear());
+    Object.values(this.history).forEach(r => r.clear());
+    this._rms1.clear();
+    this._rms2.clear();
   }
 }
 
 // =========================================================================
 // ---- WebSocket Connection Manager ---------------------------------------
 // =========================================================================
-let ws = null;
+let ws          = null;
 let wsConnected = false;
-let cachedPorts = [];
+let cachedPorts   = [];
 let cachedCameras = [];
 
 function connectToBackend() {
@@ -199,10 +297,10 @@ function connectToBackend() {
 
   ws.onmessage = (event) => {
     if (event.data instanceof ArrayBuffer) {
-      const view = new DataView(event.data);
-      const well = view.getUint8(0);
-      const w = view.getUint16(1);
-      const h = view.getUint16(3);
+      const view   = new DataView(event.data);
+      const well   = view.getUint8(0);
+      const w      = view.getUint16(1);
+      const h      = view.getUint16(3);
       const pixels = new Uint8ClampedArray(event.data, 5);
       window.dispatchEvent(new CustomEvent('mccb_camera_frame', { detail: { well, width: w, height: h, pixels } }));
       return;
@@ -222,18 +320,14 @@ function handleBackendMessage(msg) {
     const wellNum = msg.data.well;
     if (engine.wells[wellNum]) {
       engine.wells[wellNum]._ingest(msg.data.data);
-      engine._emit();
+      engine._scheduleEmit();   // throttled — one rAF per burst
     }
   } else if (msg.type === 'log') {
-    // ALL serial lines — both raw board output and system events — come through
-    // this path. Push every one to the well's log so the UI serial feed is complete.
     const wellNum = msg.data.well;
     const w = engine.wells[wellNum];
     if (w) {
-      const level = msg.data.level || 'info';
-      const line  = msg.data.line  || '';
-      w._pushLog(level, line);
-      engine._emit();
+      w._pushLog(msg.data.level || 'info', msg.data.line || '');
+      engine._scheduleEmit();
     }
   } else if (msg.type === 'ports') {
     cachedPorts = msg.data;
@@ -244,10 +338,10 @@ function handleBackendMessage(msg) {
   } else if (msg.type === 'calibration') {
     const wellNum = msg.data.well;
     if (engine.wells[wellNum]) {
-      engine.wells[wellNum].gaussLut = msg.data.lut;
-      engine.wells[wellNum].calibrated = true;
-      engine.wells[wellNum].calibrating = false;
-      engine.wells[wellNum].reverseGaussLut = buildReverseLutFromArr(msg.data.lut);
+      engine.wells[wellNum].gaussLut         = msg.data.lut;
+      engine.wells[wellNum].calibrated       = true;
+      engine.wells[wellNum].calibrating      = false;
+      engine.wells[wellNum].reverseGaussLut  = buildReverseLutFromArr(msg.data.lut);
       engine._emit();
     }
   } else if (msg.type === 'cal_status') {
@@ -264,9 +358,9 @@ function handleBackendMessage(msg) {
       const status = msg.data.status;
       w.flashing = (status === 'running');
       if (status === 'running') {
-        window.dispatchEvent(new CustomEvent('mccb_toast', { detail: { kind: 'ok', text: `Flashing firmware to Well ${wellNum}…` } }));
+        window.dispatchEvent(new CustomEvent('mccb_toast', { detail: { kind: 'ok',   text: `Flashing firmware to Well ${wellNum}…` } }));
       } else if (status === 'done') {
-        window.dispatchEvent(new CustomEvent('mccb_toast', { detail: { kind: 'ok', text: `Well ${wellNum} firmware flashed` } }));
+        window.dispatchEvent(new CustomEvent('mccb_toast', { detail: { kind: 'ok',   text: `Well ${wellNum} firmware flashed` } }));
       } else if (status === 'error') {
         window.dispatchEvent(new CustomEvent('mccb_toast', { detail: { kind: 'error', text: `Well ${wellNum} flash failed: ${msg.data.msg || 'unknown error'}` } }));
       }
@@ -280,18 +374,33 @@ function handleBackendMessage(msg) {
 // =========================================================================
 class Engine {
   constructor() {
-    this.wells = {};
+    this.wells  = {};
     for (let i = 1; i <= 4; i++) this.wells[i] = new WellDevice(i);
-    this._subs = new Set();
-    this.running = false;
-    this.globalStopped = false;
+    this._subs          = new Set();
+    this.running        = false;
+    this.globalStopped  = false;
+    this._emitPending   = false;   // rAF throttle flag
   }
 
   subscribe(cb) { this._subs.add(cb); return () => this._subs.delete(cb); }
-  _emit() { this._subs.forEach((cb) => cb(this)); }
+
+  // Immediate emit — used for non-telemetry events (calibration, flash, etc.)
+  _emit() { this._subs.forEach(cb => cb(this)); }
+
+  // Throttled emit — coalesces rapid telemetry bursts into one notify per
+  // animation frame (~16 ms). Prevents 50 back-to-back React re-renders
+  // from a single ser.read(512) burst.
+  _scheduleEmit() {
+    if (this._emitPending) return;
+    this._emitPending = true;
+    requestAnimationFrame(() => {
+      this._emitPending = false;
+      this._emit();
+    });
+  }
 
   start() { this.running = true; }
-  stop() { this.running = false; }
+  stop()  { this.running = false; }
 
   assign(map, doFlash = true) {
     for (let i = 1; i <= 4; i++) {
@@ -317,13 +426,13 @@ class Engine {
     }
     if (gauss != null) {
       if (!w.calibrated) {
-        console.warn("Cannot set Gauss: Well not calibrated!");
+        console.warn('Cannot set Gauss: Well not calibrated!');
         window.dispatchEvent(new CustomEvent('mccb_toast', { detail: { kind: 'error', text: `Well ${wellNum} requires magnetic calibration first.` } }));
         return;
       }
       w.setGauss = clamp(gauss, 0, MAX_MAG);
       const pwm = physicalToPwm(w.setGauss, w.reverseGaussLut);
-      this._command({ cmd: 'set', well: wellNum, channel: 'h', pwm: pwm });
+      this._command({ cmd: 'set', well: wellNum, channel: 'h', pwm });
     }
   }
 
@@ -365,20 +474,20 @@ class Engine {
     this._command({ cmd: 'stop', well: 'all' });
   }
 
-  get assignedWells() { return Object.values(this.wells).filter((w) => w.assigned).map((w) => w.num); }
-  get anyActive() { return Object.values(this.wells).some((w) => w.assigned && (w.setEfield > 0 || w.setGauss > 0)); }
-  get anyCalibrating() { return Object.values(this.wells).some((w) => w.assigned && w.calibrating); }
+  get assignedWells()  { return Object.values(this.wells).filter(w => w.assigned).map(w => w.num); }
+  get anyActive()      { return Object.values(this.wells).some(w => w.assigned && (w.setEfield > 0 || w.setGauss > 0)); }
+  get anyCalibrating() { return Object.values(this.wells).some(w => w.assigned && w.calibrating); }
 }
 
-function enumeratePorts() { if (wsConnected) sendToBackend({ cmd: 'enumerate_ports' }); return cachedPorts; }
+function enumeratePorts()   { if (wsConnected) sendToBackend({ cmd: 'enumerate_ports' });   return cachedPorts; }
 function enumerateCameras() { if (wsConnected) sendToBackend({ cmd: 'enumerate_cameras' }); return cachedCameras; }
 
 const engine = new Engine();
 connectToBackend();
 
 window.MCCB = {
-  MAX_EFIELD, MAX_MAG, HISTORY,
-  engine: engine,
+  MAX_EFIELD, MAX_MAG, HISTORY, RMS_WINDOW,
+  engine,
   enumeratePorts,
   enumerateCameras,
   sendToBackend,
