@@ -235,23 +235,13 @@ class WellDevice {
   get rms2() { return this._rms2.value; }
 
   // ---- Ingest a telemetry object from the backend ---------------------
-  // measGauss1/2 are read from ring.last AFTER push, so they always
-  // reflect the newest sample even during a burst of 50+ rapid updates.
-  //
-  // Also handles raw serial strings in the form "24.56 26.32"
-  // (HE1 HE2, space-separated floats) that arrive before the backend
-  // has a chance to parse them into structured JSON.
+  // Only called from the 'telemetry' WebSocket message path.
+  // NEVER called from the 'log' path — that causes double-counting and
+  // makes sumSq grow without bound (RMS hits millions within seconds).
+  // measGauss1/2 are set from ring.last after push so they reflect the
+  // newest sample even during a burst of 50+ rapid updates.
   _ingest(obj) {
-    // --- Raw string fallback: "24.56 26.32" or "24.56 26.32 ..." -----
-    if (typeof obj === 'string') {
-      const parts = obj.trim().split(/\s+/).map(Number);
-      // Reject if any part is NaN or negative (bad/partial line)
-      if (parts.length >= 2 && parts.every(v => !isNaN(v) && v >= 0)) {
-        obj = { gauss1: parts[0], gauss2: parts[1] };
-      } else {
-        return; // not a recognisable sensor line — ignore
-      }
-    }
+    if (!obj || typeof obj !== 'object') return; // reject strings/nulls
 
     if ('efield' in obj) {
       this.history.efield.push(obj.efield);
@@ -348,17 +338,12 @@ function handleBackendMessage(msg) {
     const wellNum = msg.data.well;
     const w = engine.wells[wellNum];
     if (w) {
-      const line = msg.data.line || '';
-      // If the raw line looks like sensor data ("24.56 26.32"), ingest it
-      // directly so measGauss1/2 and RMS are updated even when the backend
-      // hasn't parsed it into a structured telemetry packet yet.
-      if (msg.data.level === 'raw') {
-        const parts = line.trim().split(/\s+/).map(Number);
-        if (parts.length >= 2 && parts.every(v => !isNaN(v) && v >= 0)) {
-          w._ingest(line);  // _ingest handles the string-format path
-        }
-      }
-      w._pushLog(msg.data.level || 'info', line);
+      // Log messages are display-only. The backend sends a separate
+      // 'telemetry' message for every reading — ingesting the raw log line
+      // here too would push each sample into the rings TWICE, doubling
+      // sumSq without doubling evictions and causing RMS to blow up to
+      // millions. Log path must never touch _ingest.
+      w._pushLog(msg.data.level || 'info', msg.data.line || '');
       engine._scheduleEmit();
     }
   } else if (msg.type === 'ports') {
