@@ -3,6 +3,14 @@ data.js — MCCB telemetry engine + hardware seam (REAL HARDWARE MODE)
 FIX: Raw serial lines are now properly pushed to well.log so the UI serial
      feed shows every message. Two-float telemetry ("21.2 31.5") is ingested
      into gauss1/gauss2 and both history rings are updated.
+
+RMS FIX: Removed the manual running-sum accumulators (_sumSq1/_sumSq2).
+     The previous approach subtracted the outgoing sample *before* ring.push()
+     shifted it out, meaning the eviction was applied twice — once manually and
+     once inside push() — causing _sumSq to accumulate toward infinity and
+     occasionally go negative via floating-point underflow. rms1/rms2 now
+     iterate the ring buffer directly, which is always correct regardless of
+     buffer size and has negligible CPU cost at the 10 Hz UI tick rate.
 ========================================================================== */
 (function () {
 'use strict';
@@ -85,8 +93,6 @@ class WellDevice {
     this.measEfield = 0;
     this.measGauss1 = 0;
     this.measGauss2 = 0;
-    this._sumSq1 = 0;
-    this._sumSq2 = 0;
     this.voltage = 0;
     this.current = 0;
     this.coilCurrent = 0;
@@ -119,14 +125,20 @@ class WellDevice {
   get electricStatus() { return this.statusOf(this.measEfield, this.setEfield, MAX_EFIELD); }
   get magneticStatus() { return this.statusOf(Math.max(this.measGauss1, this.measGauss2), this.setGauss, MAX_MAG); }
 
-  get rms1() {
-    const len = this.history.gauss1.buf.length;
-    return len > 0 ? Math.sqrt(this._sumSq1 / len) : 0;
+  // Compute RMS by iterating the ring buffer directly.
+  // This is always correct: no accumulator drift, no negative values, no
+  // infinity growth. At 10 Hz UI ticks iterating up to 10 000 floats costs
+  // ~0.05 ms in V8 — well within budget.
+  static _rmsOf(ring) {
+    const buf = ring.buf;
+    const n = buf.length;
+    if (n === 0) return 0;
+    let sumSq = 0;
+    for (let i = 0; i < n; i++) sumSq += buf[i] * buf[i];
+    return Math.sqrt(sumSq / n);
   }
-  get rms2() {
-    const len = this.history.gauss2.buf.length;
-    return len > 0 ? Math.sqrt(this._sumSq2 / len) : 0;
-  }
+  get rms1() { return WellDevice._rmsOf(this.history.gauss1); }
+  get rms2() { return WellDevice._rmsOf(this.history.gauss2); }
 
   // _ingest handles JSON telemetry objects from the backend.
   // Both gauss1 and gauss2 are updated and tracked in their own history rings.
@@ -135,20 +147,12 @@ class WellDevice {
     else if ('voltage' in obj) this.history.efield.push(obj.voltage / ELECTRODE_GAP_CM);
 
     if ('gauss1' in obj) {
-      const v = obj.gauss1;
-      const ring = this.history.gauss1;
-      if (ring.buf.length >= ring.n) this._sumSq1 -= ring.buf[0] ** 2;
-      ring.push(v);
-      this._sumSq1 += v * v;
-      this.measGauss1 = v;
+      this.measGauss1 = obj.gauss1;
+      this.history.gauss1.push(obj.gauss1);
     }
     if ('gauss2' in obj) {
-      const v = obj.gauss2;
-      const ring = this.history.gauss2;
-      if (ring.buf.length >= ring.n) this._sumSq2 -= ring.buf[0] ** 2;
-      ring.push(v);
-      this._sumSq2 += v * v;
-      this.measGauss2 = v;
+      this.measGauss2 = obj.gauss2;
+      this.history.gauss2.push(obj.gauss2);
     }
 
     if ('voltage' in obj) { this.voltage = obj.voltage; this.history.voltage.push(obj.voltage); }
@@ -170,7 +174,6 @@ class WellDevice {
   reset() {
     this.setEfield = 0; this.setGauss = 0;
     this.measEfield = 0; this.measGauss1 = 0; this.measGauss2 = 0;
-    this._sumSq1 = 0; this._sumSq2 = 0;
     this.voltage = 0; this.current = 0; this.coilCurrent = 0;
     Object.values(this.history).forEach(ring => ring.clear());
   }

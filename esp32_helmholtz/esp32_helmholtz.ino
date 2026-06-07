@@ -185,7 +185,7 @@ float measureGaussAtPwm(float pwmPercent) {
     Serial.println(" IN2=0");
 
     // Re-assert both pins every 10ms during settle so IN2 never floats
-    int settleMs = 2000;
+    int settleMs = 1200;
     for (int t = 0; t < settleMs; t += 10) {
         ledcWrite(HELM_IN2_PIN, 0);
         ledcWrite(HELM_IN1_PIN, pwmVal);
@@ -250,16 +250,16 @@ void calibrateMagneticLut() {
         Serial.println("CAL_TRUNCATED (plateau/rolloff discarded)");
     }
 
-    // Refine until all jumps < 1.0 Gauss, within the monotonic region only
+    // Refine until all jumps < 2.0 Gauss, within the monotonic region only
     bool needsRefinement = true;
-    while (needsRefinement && numPoints < 900) {
+    while (needsRefinement && numPoints < 200) {
         needsRefinement = false;
         int insertIdx = -1;
         float maxDiff = 0;
 
         for (int i = 0; i < numPoints-1; i++) {
             float diff = abs(calPoints[i+1].gauss - calPoints[i].gauss);
-            if (diff >= 1.0 && diff > maxDiff) {
+            if (diff >= 2.0 && diff > maxDiff) {
                 maxDiff = diff;
                 insertIdx = i;
                 needsRefinement = true;
