@@ -213,23 +213,16 @@ function SidebarCalibration({ well }) {
   );
 }
 
-// ---- Single readout cell --------------------------------------------------
-function Readout({ label, value, decimals = 2, unit, accent }) {
-  return (
-    <div className={'readout' + (accent ? ' accent' : '')}>
-      <div className="ro-label">{label}</div>
-      <div>
-        <AnimatedNumber className="ro-value" value={value} decimals={decimals} />
-        {unit && <span className="ro-unit">{unit}</span>}
-      </div>
-    </div>
-  );
-}
+// ---- Readout helpers — plain functions, NOT React components --------------
+// Keeping these as plain functions (called as renderReadout(...) rather than
+// <Readout ...>) means the value is evaluated in the SAME render pass as
+// the parent — exactly like the bare {rmsVal.toFixed(2)} inline expressions
+// in CombinedView's block() that are the only readouts showing correct data.
+// When values cross a component boundary as props, React may skip re-rendering
+// the child even though the mutable well object's data has changed, causing
+// stale/accumulating displays. Plain functions have no such boundary.
 
-// StaticReadout: like Readout but skips AnimatedNumber.
-// Use for RMS and any value where tween drift would produce misleading
-// intermediate states (e.g. a sliding-window RMS that updates every frame).
-function StaticReadout({ label, value, decimals = 2, unit, accent }) {
+function renderReadout(label, value, decimals = 2, unit, accent = false) {
   return (
     <div className={'readout' + (accent ? ' accent' : '')}>
       <div className="ro-label">{label}</div>
@@ -242,6 +235,10 @@ function StaticReadout({ label, value, decimals = 2, unit, accent }) {
     </div>
   );
 }
+
+// Alias — same implementation. Distinct names make call sites self-documenting.
+// renderStaticReadout is used for RMS and other stable computed values.
+const renderStaticReadout = renderReadout;
 
 // ---- Terminal log with pause / clear -------------------------------------
 // FIX: Every raw serial line is now visible.
@@ -395,19 +392,23 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
   const title  = isE ? 'Electric Field' : 'Magnetic Field';
   const filter = null; // raw lines have no keyword labels — don't filter them out
 
+  // Plain function calls — no component boundary. Values are read from `well`
+  // in THIS render pass (triggered by useEngineTick), so they are always
+  // current. This matches the pattern used by the only working readout in
+  // CombinedView (the bare {rmsVal.toFixed(2)} spans inside block()).
   const readouts = isE ? (
     <React.Fragment>
-      <Readout label="Setpoint" value={well.setEfield} unit="V/cm" />
-      <Readout label="Measured" value={well.measEfield} unit="V/cm" accent />
-      <Readout label="Voltage" value={well.voltage} decimals={3} unit="V" />
-      <Readout label="Current" value={well.current} decimals={2} unit="mA" />
+      {renderReadout('Setpoint',  well.setEfield, 2,  'V/cm')}
+      {renderReadout('Measured',  well.measEfield, 2, 'V/cm', true)}
+      {renderReadout('Voltage',   well.voltage,    3, 'V')}
+      {renderReadout('Current',   well.current,    2, 'mA')}
     </React.Fragment>
   ) : (
     <React.Fragment>
-      <Readout label="HE1 Inst." value={well.measGauss1} unit="G" accent />
-      <StaticReadout label="HE1 RMS (2s)" value={well.rms1} unit="G" />
-      <Readout label="HE2 Inst." value={well.measGauss2} unit="G" accent />
-      <StaticReadout label="HE2 RMS (2s)" value={well.rms2} unit="G" />
+      {renderReadout('HE1 Inst.',    well.measGauss1, 2, 'G', true)}
+      {renderStaticReadout('HE1 RMS (2s)', well.rms1, 2, 'G')}
+      {renderReadout('HE2 Inst.',    well.measGauss2, 2, 'G', true)}
+      {renderStaticReadout('HE2 RMS (2s)', well.rms2, 2, 'G')}
     </React.Fragment>
   );
 
@@ -525,7 +526,7 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
               <span>
                 <span className="kicker" style={{ fontSize: 10 }}>HE1 </span>
                 <span className="mono" style={{ fontSize: 20, fontWeight: 700, color: accent }}>
-                  <AnimatedNumber value={measVal} decimals={2} /><span className="ro-unit">{unit}</span>
+                  {Number(measVal).toFixed(2)}<span className="ro-unit">{unit}</span>
                 </span>
                 {rmsVal !== undefined && rmsVal !== null && (
                   <span className="kicker" style={{ color: 'var(--dim)', marginLeft: 4 }}>
@@ -537,7 +538,7 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
               <span>
                 <span className="kicker" style={{ fontSize: 10 }}>HE2 </span>
                 <span className="mono" style={{ fontSize: 20, fontWeight: 700, color: SERIES_COLORS[1] }}>
-                  <AnimatedNumber value={measVal2} decimals={2} /><span className="ro-unit">{unit}</span>
+                  {Number(measVal2).toFixed(2)}<span className="ro-unit">{unit}</span>
                 </span>
                 {rmsVal2 !== undefined && rmsVal2 !== null && (
                   <span className="kicker" style={{ color: 'var(--dim)', marginLeft: 4 }}>
@@ -548,7 +549,7 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
             </span>
           ) : (
             <span className="mono" style={{ fontSize: 22, fontWeight: 700, color: accent }}>
-              <AnimatedNumber value={measVal} decimals={2} /><span className="ro-unit">{unit}</span>
+              {Number(measVal).toFixed(2)}<span className="ro-unit">{unit}</span>
             </span>
           )}
           {!isMag && rmsVal !== undefined && rmsVal !== null && (
