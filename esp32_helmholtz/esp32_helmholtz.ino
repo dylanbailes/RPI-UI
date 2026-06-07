@@ -177,7 +177,7 @@ float measureGaussAtPwm(float pwmPercent) {
     lastHelmPwm1 = pwmVal;
     lastHelmPwm2 = 0;
 
-    delay(300); // settle
+    delay(800); // settle
 
     long sum1 = 0;
     for (int i = 0; i < 400; i++) {
@@ -200,13 +200,13 @@ void calibrateMagneticLut() {
     Serial.println("CAL_START");
 
     int numPoints = 0;
-    float coarse[] = {0.0, 20.0, 40.0, 60.0, 80.0, 100.0};
-    for (int i = 0; i < 6; i++) {
-        calPoints[numPoints].pwm   = coarse[i];
-        calPoints[numPoints].gauss = measureGaussAtPwm(coarse[i]);
+    for (int i = 0; i <= 20; i++) {
+        float pct = i * 5.0;
+        calPoints[numPoints].pwm   = pct;
+        calPoints[numPoints].gauss = measureGaussAtPwm(pct);
         numPoints++;
         Serial.print("CAL_PT ");
-        Serial.print(coarse[i]);
+        Serial.print(pct);
         Serial.print(" ");
         Serial.println(calPoints[numPoints-1].gauss, 3);
     }
