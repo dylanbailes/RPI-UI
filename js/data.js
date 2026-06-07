@@ -216,15 +216,15 @@ function sendToBackend(obj) {
 
 function handleBackendMessage(msg) {
   if (msg.type === 'telemetry') {
-    const wellNum = msg.well;
+    const wellNum = msg.data.well;
     if (engine.wells[wellNum]) {
-      engine.wells[wellNum]._ingest(msg.data);
+      engine.wells[wellNum]._ingest(msg.data.data);
       engine._emit();
     }
   } else if (msg.type === 'log') {
     // ALL serial lines — both raw board output and system events — come through
     // this path. Push every one to the well's log so the UI serial feed is complete.
-    const wellNum = msg.well;
+    const wellNum = msg.data.well;
     const w = engine.wells[wellNum];
     if (w) {
       const level = msg.data.level || 'info';
@@ -239,7 +239,7 @@ function handleBackendMessage(msg) {
     cachedCameras = msg.data;
     window.dispatchEvent(new CustomEvent('mccb_cameras_ready', { detail: msg.data }));
   } else if (msg.type === 'calibration') {
-    const wellNum = msg.well;
+    const wellNum = msg.data.well;
     if (engine.wells[wellNum]) {
       engine.wells[wellNum].gaussLut = msg.data.lut;
       engine.wells[wellNum].calibrated = true;
@@ -248,14 +248,14 @@ function handleBackendMessage(msg) {
       engine._emit();
     }
   } else if (msg.type === 'cal_status') {
-    const wellNum = msg.well;
+    const wellNum = msg.data.well;
     if (engine.wells[wellNum]) {
       engine.wells[wellNum].calibrating = (msg.data.status === 'running');
       if (msg.data.status === 'done') engine.wells[wellNum].calibrating = false;
       engine._emit();
     }
   } else if (msg.type === 'flash_status') {
-    const wellNum = msg.well;
+    const wellNum = msg.data.well;
     const w = engine.wells[wellNum];
     if (w) {
       const status = msg.data.status;
