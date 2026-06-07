@@ -267,6 +267,11 @@ def serial_reader_loop(well_num, port, stop_event):
                         continue
 
                     # ---- Calibration protocol ----------------------------
+                    # Always forward every raw line to the serial feed first,
+                    # so the UI's raw monitor shows the complete Arduino output
+                    # regardless of whether we also parse it as a protocol msg.
+                    send_ws_sync("log", {"well": well_num, "level": "raw", "line": line})
+
                     if line.startswith("CAL_LUT "):
                         lut_str = line[8:]
                         try:
@@ -288,7 +293,10 @@ def serial_reader_loop(well_num, port, stop_event):
                                 })
                             else:
                                 peak = max(lut)
+                                # Send calibration data then explicitly mark done,
+                                # so the UI can clear "calibrating" on either message.
                                 send_ws_sync("calibration", {"well": well_num, "lut": lut})
+                                send_ws_sync("cal_status", {"well": well_num, "status": "done"})
                                 send_log(well_num,
                                          f"CAL_LUT received — {len(lut)} points, peak {peak:.2f} G", "ok")
                         except ValueError as exc:
@@ -307,7 +315,7 @@ def serial_reader_loop(well_num, port, stop_event):
                             _, pwm_s, g_s = line.split()
                             send_log(well_num, f"Cal point — PWM {float(pwm_s):.1f}% → {float(g_s):.3f} G", "info")
                         except ValueError:
-                            send_ws_sync("log", {"well": well_num, "level": "raw", "line": line})
+                            pass  # already forwarded as raw above
                     elif line == "CAL_END":
                         send_ws_sync("cal_status", {"well": well_num, "status": "done"})
                         send_log(well_num, "CAL_END — calibration sequence complete", "ok")
@@ -331,11 +339,7 @@ def serial_reader_loop(well_num, port, stop_event):
                             total_lines += 1
                             if total_lines == 1:
                                 send_log(well_num, "First telemetry frame received — board is streaming.", "ok")
-                        else:
-                            # Unrecognized line: almost certainly a firmware
-                            # debug/boot print. Surface it verbatim so the user
-                            # can see exactly what the board is saying.
-                            send_ws_sync("log", {"well": well_num, "level": "raw", "line": line})
+                        # Unrecognized lines are already forwarded as "raw" above.
             else:
                 # No bytes this cycle — warn once if the board has gone quiet.
                 if not warned_silent and (time.time() - last_data) > 3.0:
