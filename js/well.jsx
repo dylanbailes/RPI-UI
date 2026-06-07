@@ -404,11 +404,28 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
       {renderReadout('Current',   well.current,    2, 'mA')}
     </React.Fragment>
   ) : (
+    // Inline JSX — no function call indirection, no component boundary.
+    // Inst. reads well.history.gauss1.last — the exact same value the chart's
+    // leading dot uses (acc.series() slices the same ring buffer).
+    // RMS renders well.rms1.toFixed(2) inline — identical to the combined
+    // block() spans that are the only readouts known to be correct.
     <React.Fragment>
-      {renderReadout('HE1 Inst.',    well.measGauss1, 2, 'G', true)}
-      {renderStaticReadout('HE1 RMS (2s)', well.rms1, 2, 'G')}
-      {renderReadout('HE2 Inst.',    well.measGauss2, 2, 'G', true)}
-      {renderStaticReadout('HE2 RMS (2s)', well.rms2, 2, 'G')}
+      <div className="readout accent">
+        <div className="ro-label">HE1 Inst.</div>
+        <div><span className="ro-value" style={{ fontVariantNumeric: 'tabular-nums' }}>{well.history.gauss1.last.toFixed(2)}</span><span className="ro-unit">G</span></div>
+      </div>
+      <div className="readout">
+        <div className="ro-label">HE1 RMS (2s)</div>
+        <div><span className="ro-value" style={{ fontVariantNumeric: 'tabular-nums' }}>{well.rms1.toFixed(2)}</span><span className="ro-unit">G</span></div>
+      </div>
+      <div className="readout accent">
+        <div className="ro-label">HE2 Inst.</div>
+        <div><span className="ro-value" style={{ fontVariantNumeric: 'tabular-nums' }}>{well.history.gauss2.last.toFixed(2)}</span><span className="ro-unit">G</span></div>
+      </div>
+      <div className="readout">
+        <div className="ro-label">HE2 RMS (2s)</div>
+        <div><span className="ro-value" style={{ fontVariantNumeric: 'tabular-nums' }}>{well.rms2.toFixed(2)}</span><span className="ro-unit">G</span></div>
+      </div>
     </React.Fragment>
   );
 
@@ -580,7 +597,7 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
       </div>
       <div className={side ? 'row grow gap-14' : 'col grow gap-14'} style={{ minHeight: 0 }}>
         {block('Electric', eAcc, well.electricStatus, well.setEfield, well.measEfield, 'V/cm', 'electric')}
-        {block('Magnetic', mAcc, well.magneticStatus, well.setGauss, well.measGauss1, 'G', 'magnetic', well.rms1, true, well.measGauss2, well.rms2)}
+        {block('Magnetic', mAcc, well.magneticStatus, well.setGauss, well.history.gauss1.last, 'G', 'magnetic', well.rms1, true, well.history.gauss2.last, well.rms2)}
       </div>
     </div>
   );
