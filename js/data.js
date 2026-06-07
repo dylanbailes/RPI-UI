@@ -35,6 +35,11 @@ const RMS_WINDOW = 4000;   // samples in the RMS sliding window
 // History ring keeps enough samples to fill the chart. 10 000 @ 2 kHz = 5 s.
 const HISTORY    = 10000;
 
+// Number of samples shown in the chart sliding window.
+// 1 000 samples @ 2 kHz = 0.5 s — short enough to see high-frequency waves.
+// The ring retains the full HISTORY so the window can be widened without loss.
+const CHART_WINDOW = 1000;
+
 const ELECTRODE_GAP_CM = 0.5;
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -125,11 +130,22 @@ class Ring {
   // Allocates a new array — only called by the chart's rAF loop, not by
   // the hot ingest path.
   get values() {
+    return this.tailN(this.count);
+  }
+
+  // Returns the last `n` samples in chronological order (newest at end).
+  // If fewer than n samples exist, returns all of them.
+  // Used by the chart to show a fixed-duration sliding window without
+  // having to change the ring capacity.
+  tailN(n) {
     if (this.count === 0) return [];
-    const out = new Array(this.count);
-    const start = this.count < this.n ? 0 : this.head; // oldest entry
-    for (let i = 0; i < this.count; i++) {
-      out[i] = this.buf[(start + i) % this.n];
+    const take = Math.min(n, this.count);
+    const out  = new Array(take);
+    // Newest sample is at (head - 1). Walk backwards `take` steps to find
+    // the oldest sample we want, then read forward.
+    const oldestIdx = (this.head - take + this.n * 2) % this.n;
+    for (let i = 0; i < take; i++) {
+      out[i] = this.buf[(oldestIdx + i) % this.n];
     }
     return out;
   }
@@ -190,11 +206,6 @@ class WellDevice {
     this.measEfield = 0;
     this.measGauss1 = 0;
     this.measGauss2 = 0;
-
-    // Magnetic waveform parameters (sent to ESP32 alongside amplitude)
-    // waveType: 1=STEP, 2=SQUARE, 3=SINE, 4=TRIANGLE  (0=OFF, handled by setGauss=0)
-    this.magWaveType = 1;    // default: DC step
-    this.magFreqHz   = 50.0; // default: 50 Hz (matches firmware default)
 
     this.voltage     = 0;
     this.current     = 0;
@@ -287,7 +298,6 @@ class WellDevice {
   reset() {
     this.setEfield = 0; this.setGauss = 0;
     this.measEfield = 0; this.measGauss1 = 0; this.measGauss2 = 0;
-    this.magWaveType = 1; this.magFreqHz = 50.0;
     this.voltage = 0; this.current = 0; this.coilCurrent = 0;
     Object.values(this.history).forEach(r => r.clear());
     this._rms1.clear();
@@ -438,7 +448,7 @@ class Engine {
     }
   }
 
-  setParams(wellNum, { efield, gauss, magWaveType, magFreqHz }) {
+  setParams(wellNum, { efield, gauss }) {
     const w = this.wells[wellNum];
     if (!w || !w.assigned) return;
     this.globalStopped = false;
@@ -447,12 +457,6 @@ class Engine {
       w.setEfield = clamp(efield, 0, MAX_EFIELD);
       this._command({ cmd: 'set', well: wellNum, channel: 'e', pwm: w.setEfield * (100.0 / MAX_EFIELD) });
     }
-
-    // Update stored wave params first so they're always reflected in UI state
-    // even if the gauss amplitude itself isn't changing this call.
-    if (magWaveType != null) w.magWaveType = magWaveType;
-    if (magFreqHz   != null) w.magFreqHz   = clamp(magFreqHz, 0.1, 250.0);
-
     if (gauss != null) {
       if (!w.calibrated) {
         console.warn('Cannot set Gauss: Well not calibrated!');
@@ -461,16 +465,7 @@ class Engine {
       }
       w.setGauss = clamp(gauss, 0, MAX_MAG);
       const pwm = physicalToPwm(w.setGauss, w.reverseGaussLut);
-      // Send waveform type and frequency alongside the amplitude so all three
-      // parameters reach the ESP32 in a single command.
-      this._command({
-        cmd:  'set',
-        well: wellNum,
-        channel: 'h',
-        pwm,
-        mode: w.magWaveType,
-        freq: w.magFreqHz,
-      });
+      this._command({ cmd: 'set', well: wellNum, channel: 'h', pwm });
     }
   }
 
@@ -524,7 +519,7 @@ const engine = new Engine();
 connectToBackend();
 
 window.MCCB = {
-  MAX_EFIELD, MAX_MAG, HISTORY, RMS_WINDOW,
+  MAX_EFIELD, MAX_MAG, HISTORY, RMS_WINDOW, CHART_WINDOW,
   engine,
   enumeratePorts,
   enumerateCameras,
