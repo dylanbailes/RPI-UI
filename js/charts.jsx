@@ -20,24 +20,36 @@ function useEngineTick(hz = 10) {
 }
 
 // ---- AnimatedNumber: tweens to its target, monospace ----------------------
+// FIX: The original used `a.from = disp` (stale React state) as the tween
+// start point. When new values arrive faster than the 260 ms tween duration
+// each new animation restarts from an outdated snapshot, causing the display
+// to ratchet upward continuously. The fix stores the true live position in a
+// ref (dispRef) that is written on every animation frame, so a.from always
+// picks up exactly where the needle is sitting right now.
 function AnimatedNumber({ value, decimals = 2, className, style }) {
   const [disp, setDisp] = useState(value);
-  const ref = useRef({ from: value, to: value, start: 0 });
+  const dispRef = useRef(value);        // true live position, updated every frame
+  const animRef = useRef({ from: value, to: value, start: 0, raf: null });
+
   useEffect(() => {
-    const a = ref.current;
-    a.from = disp; a.to = value; a.start = performance.now();
-    let raf;
+    const a = animRef.current;
+    if (a.raf) { cancelAnimationFrame(a.raf); a.raf = null; }
+    a.from  = dispRef.current;          // start from wherever the needle actually is
+    a.to    = value;
+    a.start = performance.now();
     const dur = 260;
     const tick = (now) => {
       const p = Math.min(1, (now - a.start) / dur);
       const e = 1 - Math.pow(1 - p, 3); // ease-out cubic
-      setDisp(a.from + (a.to - a.from) * e);
-      if (p < 1) raf = requestAnimationFrame(tick);
+      const v = a.from + (a.to - a.from) * e;
+      dispRef.current = v;              // keep ref in sync before state update
+      setDisp(v);
+      a.raf = p < 1 ? requestAnimationFrame(tick) : null;
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-    // eslint-disable-next-line
+    a.raf = requestAnimationFrame(tick);
+    return () => { if (a.raf) { cancelAnimationFrame(a.raf); a.raf = null; } };
   }, [value]);
+
   return (
     <span className={className} style={{ fontVariantNumeric: 'tabular-nums', ...style }}>
       {disp.toFixed(decimals)}
