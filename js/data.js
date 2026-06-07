@@ -191,6 +191,11 @@ class WellDevice {
     this.measGauss1 = 0;
     this.measGauss2 = 0;
 
+    // Magnetic waveform parameters (sent to ESP32 alongside amplitude)
+    // waveType: 1=STEP, 2=SQUARE, 3=SINE, 4=TRIANGLE  (0=OFF, handled by setGauss=0)
+    this.magWaveType = 1;    // default: DC step
+    this.magFreqHz   = 50.0; // default: 50 Hz (matches firmware default)
+
     this.voltage     = 0;
     this.current     = 0;
     this.coilCurrent = 0;
@@ -282,6 +287,7 @@ class WellDevice {
   reset() {
     this.setEfield = 0; this.setGauss = 0;
     this.measEfield = 0; this.measGauss1 = 0; this.measGauss2 = 0;
+    this.magWaveType = 1; this.magFreqHz = 50.0;
     this.voltage = 0; this.current = 0; this.coilCurrent = 0;
     Object.values(this.history).forEach(r => r.clear());
     this._rms1.clear();
@@ -432,7 +438,7 @@ class Engine {
     }
   }
 
-  setParams(wellNum, { efield, gauss }) {
+  setParams(wellNum, { efield, gauss, magWaveType, magFreqHz }) {
     const w = this.wells[wellNum];
     if (!w || !w.assigned) return;
     this.globalStopped = false;
@@ -441,6 +447,12 @@ class Engine {
       w.setEfield = clamp(efield, 0, MAX_EFIELD);
       this._command({ cmd: 'set', well: wellNum, channel: 'e', pwm: w.setEfield * (100.0 / MAX_EFIELD) });
     }
+
+    // Update stored wave params first so they're always reflected in UI state
+    // even if the gauss amplitude itself isn't changing this call.
+    if (magWaveType != null) w.magWaveType = magWaveType;
+    if (magFreqHz   != null) w.magFreqHz   = clamp(magFreqHz, 0.1, 250.0);
+
     if (gauss != null) {
       if (!w.calibrated) {
         console.warn('Cannot set Gauss: Well not calibrated!');
@@ -449,7 +461,16 @@ class Engine {
       }
       w.setGauss = clamp(gauss, 0, MAX_MAG);
       const pwm = physicalToPwm(w.setGauss, w.reverseGaussLut);
-      this._command({ cmd: 'set', well: wellNum, channel: 'h', pwm });
+      // Send waveform type and frequency alongside the amplitude so all three
+      // parameters reach the ESP32 in a single command.
+      this._command({
+        cmd:  'set',
+        well: wellNum,
+        channel: 'h',
+        pwm,
+        mode: w.magWaveType,
+        freq: w.magFreqHz,
+      });
     }
   }
 

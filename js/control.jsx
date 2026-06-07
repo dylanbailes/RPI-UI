@@ -38,9 +38,13 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
     init[n] = {
       electric: w.setEfield ? String(w.setEfield) : '',
       magnetic: w.setGauss ? String(w.setGauss) : '',
+      magWaveType: w.magWaveType || 1,
+      magFreq: w.magFreqHz ? String(w.magFreqHz) : '50',
     };
   });
   const [vals, setVals] = React.useState(init);
+  // armed tracks which numpad field is being edited: `${well}-electric`,
+  // `${well}-magnetic`, or `${well}-magFreq`
   const initialKey = initialWell && initialMetric && (initialMetric === 'electric' || initialMetric === 'magnetic')
     ? `${initialWell}-${initialMetric}` : null;
   const [armed, setArmed] = React.useState(initialKey);
@@ -49,8 +53,22 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
   const showM = mode === 'magnetic' || mode === 'dual';
   const label = { electric: 'Electric Field', magnetic: 'Magnetic Field', dual: 'Dual — Electric + Magnetic' }[mode];
 
-  function fieldVal(key) { const [n, m] = key.split('-'); return vals[n][m]; }
-  function setFieldVal(key, v) { const [n, m] = key.split('-'); setVals((s) => ({ ...s, [n]: { ...s[n], [m]: v } })); }
+  // fieldVal / setFieldVal handle keys: `${n}-electric`, `${n}-magnetic`, `${n}-magFreq`
+  function fieldVal(key) {
+    const parts = key.split('-');
+    const n = parts[0];
+    const m = parts.slice(1).join('-'); // 'electric' | 'magnetic' | 'magFreq'
+    return vals[n][m];
+  }
+  function setFieldVal(key, v) {
+    const parts = key.split('-');
+    const n = parts[0];
+    const m = parts.slice(1).join('-');
+    setVals((s) => ({ ...s, [n]: { ...s[n], [m]: v } }));
+  }
+  function setWaveType(n, wt) {
+    setVals((s) => ({ ...s, [n]: { ...s[n], magWaveType: wt } }));
+  }
 
   function onKey(k) {
     if (!armed) return;
@@ -60,14 +78,26 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
     else cur += k;
     setFieldVal(armed, cur);
   }
-  const armedLabel = armed ? (() => { const [n, m] = armed.split('-'); return `Well ${n} ${m}`; })() : null;
+  function armedLabelText() {
+    if (!armed) return null;
+    const parts = armed.split('-');
+    const n = parts[0];
+    const m = parts.slice(1).join('-');
+    const mLabel = m === 'electric' ? 'Electric' : m === 'magnetic' ? 'Magnetic (G)' : 'Frequency (Hz)';
+    return `Well ${n} ${mLabel}`;
+  }
+  const armedLabel = armedLabelText();
 
   function rangeBad(key) {
     const v = parseFloat(fieldVal(key));
-    if (fieldVal(key) === '' ) return false;
+    if (fieldVal(key) === '') return false;
     if (isNaN(v)) return true;
-    const [, m] = key.split('-');
-    return m === 'electric' ? (v < 0 || v > MAX_EFIELD) : (v < 0 || v > MAX_MAG);
+    const parts = key.split('-');
+    const m = parts.slice(1).join('-');
+    if (m === 'electric') return v < 0 || v > MAX_EFIELD;
+    if (m === 'magnetic') return v < 0 || v > MAX_MAG;
+    if (m === 'magFreq')  return v < 0.1 || v > 250;
+    return false;
   }
 
   function apply() {
@@ -83,7 +113,19 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
         const v = parseFloat(vals[n].magnetic);
         if (isNaN(v) || v < 0 || v > MAX_MAG) errors.push(`Well ${n} magnetic out of range (0–${MAX_MAG}).`);
         else if (!eng.wells[n].calibrated) errors.push(`Well ${n} requires magnetic calibration first.`);
-        else { eng.setParams(n, { gauss: v }); summary.push(`W${n} M ${v} G`); }
+        else {
+          // Parse frequency — fall back to current stored value if field left blank
+          const freqStr = vals[n].magFreq;
+          const freq = freqStr !== '' ? parseFloat(freqStr) : eng.wells[n].magFreqHz;
+          if (isNaN(freq) || freq < 0.1 || freq > 250) {
+            errors.push(`Well ${n} frequency out of range (0.1–250 Hz).`);
+          } else {
+            const wt = vals[n].magWaveType;
+            const waveNames = { 1: 'STEP', 2: 'SQR', 3: 'SINE', 4: 'TRI' };
+            eng.setParams(n, { gauss: v, magWaveType: wt, magFreqHz: freq });
+            summary.push(`W${n} M ${v} G · ${waveNames[wt] || 'STEP'} ${wt !== 1 ? freq.toFixed(1) + ' Hz' : 'DC'}`);
+          }
+        }
       }
     });
     if (errors.length) { onToast({ kind: 'error', text: errors[0] }); return; }
@@ -116,16 +158,37 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
                         onArm={setArmed} />
                     )}
                     {showM && (
-                      <FieldRow label="Magnetic (Gauss)" placeholder={eng.wells[n].calibrated ? `0 – ${MAX_MAG}` : 'Calibrate well first'}
-                        k={`${n}-magnetic`} value={vals[n].magnetic} armed={armed} bad={rangeBad(`${n}-magnetic`)}
-                        disabled={!eng.wells[n].calibrated} onArm={setArmed} />
+                      <React.Fragment>
+                        <FieldRow label="Magnetic (Gauss)" placeholder={eng.wells[n].calibrated ? `0 – ${MAX_MAG}` : 'Calibrate well first'}
+                          k={`${n}-magnetic`} value={vals[n].magnetic} armed={armed} bad={rangeBad(`${n}-magnetic`)}
+                          disabled={!eng.wells[n].calibrated} onArm={setArmed} />
+
+                        {/* Wave type selector — only shown when calibrated */}
+                        <div className="col" style={{ gap: 6, opacity: eng.wells[n].calibrated ? 1 : 0.45 }}>
+                          <span style={{ fontWeight: 700, fontSize: 12, letterSpacing: 1, textTransform: 'uppercase' }}>Waveform</span>
+                          <WaveTypeSelector
+                            value={vals[n].magWaveType}
+                            disabled={!eng.wells[n].calibrated}
+                            onChange={(wt) => setWaveType(n, wt)} />
+                        </div>
+
+                        {/* Frequency field — hidden for STEP (DC) since freq is irrelevant */}
+                        {vals[n].magWaveType !== 1 && (
+                          <FieldRow label="Frequency (Hz) · 0.1 – 250"
+                            placeholder="0.1 – 250"
+                            k={`${n}-magFreq`} value={vals[n].magFreq} armed={armed}
+                            bad={rangeBad(`${n}-magFreq`)}
+                            disabled={!eng.wells[n].calibrated}
+                            onArm={setArmed} />
+                        )}
+                      </React.Fragment>
                     )}
                   </div>
                 </div>
               ))}
             </div>
             <p style={{ color: 'var(--dim)', fontSize: 12, marginTop: 16, lineHeight: 1.5 }}>
-              Limits enforced before transmit · Electric ≤ {MAX_EFIELD} V/cm · Magnetic ≤ {MAX_MAG} Gauss. Leave a field blank to hold its current value.
+              Limits enforced before transmit · Electric ≤ {MAX_EFIELD} V/cm · Magnetic ≤ {MAX_MAG} G · Frequency 0.1–250 Hz. Leave a field blank to hold its current value.
             </p>
           </div>
 
@@ -142,6 +205,75 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
           <button className="btn" style={{ flex: 1, fontSize: 16 }} onClick={apply}>Apply Parameters</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---- Wave type selector ---------------------------------------------------
+// Renders four toggle buttons: STEP (DC), SQUARE, SINE, TRIANGLE.
+// Maps to Arduino WaveformType enum: 1=STEP, 2=SQUARE, 3=SINE, 4=TRIANGLE.
+const WAVE_TYPES = [
+  { id: 1, label: 'DC',  sub: 'Step',     glyph: <WaveGlyphStep /> },
+  { id: 2, label: 'SQR', sub: 'Square',   glyph: <WaveGlyphSquare /> },
+  { id: 3, label: 'SINE',sub: 'Sine',     glyph: <WaveGlyphSine /> },
+  { id: 4, label: 'TRI', sub: 'Triangle', glyph: <WaveGlyphTri /> },
+];
+
+function WaveGlyphStep() {
+  return (
+    <svg width="36" height="18" viewBox="0 0 36 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <polyline points="2,16 2,4 34,4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+function WaveGlyphSquare() {
+  return (
+    <svg width="36" height="18" viewBox="0 0 36 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <polyline points="2,14 2,4 10,4 10,14 20,14 20,4 30,4 30,14 34,14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+function WaveGlyphSine() {
+  return (
+    <svg width="36" height="18" viewBox="0 0 36 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M2,9 C6,2 8,2 10,9 C12,16 14,16 16,9 C18,2 20,2 22,9 C24,16 26,16 28,9 C30,2 32,2 34,9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none"/>
+    </svg>
+  );
+}
+function WaveGlyphTri() {
+  return (
+    <svg width="36" height="18" viewBox="0 0 36 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <polyline points="2,9 8,3 14,15 20,3 26,15 32,3 34,5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
+function WaveTypeSelector({ value, disabled, onChange }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
+      {WAVE_TYPES.map(({ id, label, sub, glyph }) => {
+        const sel = value === id;
+        return (
+          <button
+            key={id}
+            disabled={disabled}
+            onClick={() => !disabled && onChange(id)}
+            style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+              padding: '10px 4px 8px',
+              border: sel ? '2px solid #000' : '2px solid #ddd',
+              background: sel ? '#000' : '#fafafa',
+              color: sel ? '#fff' : '#555',
+              cursor: disabled ? 'not-allowed' : 'pointer',
+              transition: 'border-color .12s, background .12s, color .12s',
+              borderRadius: 0,
+            }}>
+            {glyph}
+            <span style={{ fontWeight: 800, fontSize: 10, letterSpacing: 1 }}>{label}</span>
+            <span style={{ fontSize: 9, opacity: .7 }}>{sub}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
