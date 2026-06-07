@@ -9,6 +9,7 @@ const { useRef, useEffect, useState } = React;
 function useEngineTick(hz = 10) {
   const [, setN] = useState(0);
   useEffect(() => {
+    if (!window.MCCB || !window.MCCB.engine) return;
     let last = 0; const minDt = 1000 / hz;
     const unsub = window.MCCB.engine.subscribe(() => {
       const now = performance.now();
@@ -140,9 +141,11 @@ function LiveChart({
       }
 
       // Draw all series
+      // Series 0 uses the `color` accent prop; subsequent series use the palette.
+      const resolvedColors = [color, ...colors.filter(c => c !== color)];
       let hasData = false;
       seriesList.forEach((series, idx) => {
-        const c = colors[idx % colors.length];
+        const c = resolvedColors[idx % resolvedColors.length];
         const n = series.length;
         if (n >= 2) {
           hasData = true;
@@ -174,7 +177,7 @@ function LiveChart({
 
       // leading dots for all series
       seriesList.forEach((series, idx) => {
-        const c = colors[idx % colors.length];
+        const c = resolvedColors[idx % resolvedColors.length];
         const n = series.length;
         if (n >= 2) {
           const latest = series[n - 1];
@@ -210,24 +213,32 @@ function LiveChart({
   );
 }
 
-// tiny inline sparkline for connection/overview
-function MiniSpark({ values, max, color = '#FF3000', width = 120, height = 30 }) {
+// tiny inline sparkline for connection/overview — handles number[] or number[][]
+function MiniSpark({ values, max, color = '#FF3000', width = 120, height = 30,
+  colors = ['#FF3000', '#2A6FDB', '#1F8A5B', '#7A5AE0'] }) {
   const ref = useRef(null);
   useEffect(() => {
     const c = ref.current, ctx = c.getContext('2d');
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     c.width = width * dpr; c.height = height * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    const n = (values || []).length;
-    if (n < 2) return;
-    const yMax = max * 1.08;
-    ctx.beginPath();
-    for (let i = 0; i < n; i++) {
-      const x = (i / (n - 1)) * width;
-      const y = height - (Math.min(yMax, values[i]) / yMax) * height;
-      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-    }
-    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
+    const raw = values || [];
+    const isMulti = raw.length > 0 && Array.isArray(raw[0]);
+    const seriesList = isMulti ? raw : [raw];
+    const resolvedColors = [color, ...colors.filter(col => col !== color)];
+    seriesList.forEach((series, idx) => {
+      const n = series.length;
+      if (n < 2) return;
+      const yMax = max * 1.08;
+      const serColor = resolvedColors[idx % resolvedColors.length];
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const x = (i / (n - 1)) * width;
+        const y = height - (Math.min(yMax, Math.max(0, series[i])) / yMax) * height;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = serColor; ctx.lineWidth = idx === 0 ? 1.5 : 1; ctx.stroke();
+    });
   });
   return <canvas ref={ref} style={{ width, height, display: 'block' }}></canvas>;
 }

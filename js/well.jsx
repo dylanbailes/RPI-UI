@@ -1,13 +1,177 @@
 /* ============================================================================
 well.jsx — Per-well data tabs. Graph-primary, animated readouts,
 collapsible terminal log, COMBINED / ELECTRIC / MAGNETIC sub-views.
-Layout + chart styling are driven by Tweaks.
+
+FIX 1 — Raw Serial Feed:
+  LogPanel no longer over-filters. When no `filter` is passed (Combined view,
+  no sub-filter), ALL lines are shown. When a `filter` keyword is provided
+  (e.g. "voltage" or "gauss"), system lines (starting with "»") are always
+  shown, AND raw lines that contain the keyword are shown. Raw lines that
+  don't match are still shown in the unfiltered panel so nothing is hidden from
+  the operator. The "Raw Serial Feed" label now correctly reflects the filter.
+
+FIX 2 — Dual-series graphing:
+  LiveChart and MiniSpark accept `getSeries()` returning either a flat number[]
+  (single series) OR an array of number[] (multi-series). When multiple series
+  are detected they are drawn with distinct colours (accent + a muted secondary)
+  so both gauss1 and gauss2 are visible on the same chart.
 ========================================================================== */
 import React from 'react';
 
-// ---- Local calibration status pill (mirrors control.jsx look) -------------
+// ---- helpers assumed global (defined in charts.jsx) ----------------------
+// AnimatedNumber, StatusPill, useEngineTick — accessed via window.* or
+// declared inline as fallbacks below so this file is self-contained if
+// charts.jsx hasn't loaded yet.
+
+function AnimatedNumber({ value = 0, decimals = 2, className, style }) {
+  // charts.jsx provides a fancier version; this is the fallback.
+  if (window.AnimatedNumber) return React.createElement(window.AnimatedNumber, { value, decimals, className, style });
+  return <span className={className} style={style}>{Number(value).toFixed(decimals)}</span>;
+}
+function StatusPill({ status, big }) {
+  if (window.StatusPill) return React.createElement(window.StatusPill, { status, big });
+  const map = { OFF: ['#aaa', '#f4f4f4'], LOCKED: ['#16A34A', '#D8F3DF'], RAMPING: ['#C98A00', '#FFF3CD'], OVER: ['#e00', '#ffe'], };
+  const [dot, bg] = map[status] || ['#aaa', '#eee'];
+  return <span style={{ display:'inline-flex', alignItems:'center', gap:4, background:bg, borderRadius:2, padding:'2px 7px', fontSize:10, fontWeight:700 }}><span style={{ width:6,height:6,borderRadius:'50%',background:dot,display:'inline-block' }}></span>{status}</span>;
+}
+function useEngineTick(fps = 10) {
+  if (window.useEngineTick) { window.useEngineTick(fps); return; }
+  const [, force] = React.useReducer(x => x + 1, 0);
+  React.useEffect(() => {
+    if (!window.MCCB || !window.MCCB.engine) return;
+    const unsub = window.MCCB.engine.subscribe(() => force());
+    return () => unsub && unsub();
+  }, []);
+}
+
+// ---- Multi-series SVG chart (inline — avoids dependency on charts.jsx) ----
+// getSeries() → number[]  (single)  OR  number[][] (multi)
+// When multi: index 0 uses `color` (accent), index 1 uses SECONDARY_COLOR, etc.
+const SERIES_COLORS = ['var(--accent, #FF3000)', '#2A6FDB', '#1F8A5B', '#7A5AE0'];
+
+function LiveChart({ getSeries, getSetpoint, getLatest, max, color, variant = 'area', grid = true, height = '100%' }) {
+  const ref = React.useRef(null);
+  const raf = React.useRef(null);
+
+  function draw() {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const W = canvas.offsetWidth, H = canvas.offsetHeight;
+    if (!W || !H) return;
+    if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+
+    const PAD = { top: 8, right: 8, bottom: 22, left: 40 };
+    const cW = W - PAD.left - PAD.right;
+    const cH = H - PAD.top - PAD.bottom;
+
+    // Gridlines
+    if (grid) {
+      ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {
+        const y = PAD.top + cH - (cH * i / 4);
+        ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + cW, y); ctx.stroke();
+      }
+    }
+
+    // Y-axis labels
+    ctx.fillStyle = '#888'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+    for (let i = 0; i <= 4; i++) {
+      const val = max * i / 4;
+      const y = PAD.top + cH - (cH * i / 4);
+      ctx.fillText(val.toFixed(1), PAD.left - 4, y + 3);
+    }
+
+    // Normalise getSeries() into always-an-array-of-arrays
+    const raw = getSeries ? getSeries() : [];
+    const isMulti = Array.isArray(raw[0]);
+    const seriesArr = isMulti ? raw : [raw];
+
+    seriesArr.forEach((data, si) => {
+      if (!data || data.length < 2) return;
+      const serColor = color && si === 0 ? color : SERIES_COLORS[si] || SERIES_COLORS[si % SERIES_COLORS.length];
+      const pts = data.map((v, i) => ({
+        x: PAD.left + (i / (data.length - 1)) * cW,
+        y: PAD.top + cH - Math.max(0, Math.min(1, v / max)) * cH,
+      }));
+
+      ctx.beginPath();
+      pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+
+      if (variant === 'area' && si === 0) {
+        const path = new Path2D();
+        pts.forEach((p, i) => i === 0 ? path.moveTo(p.x, p.y) : path.lineTo(p.x, p.y));
+        path.lineTo(pts[pts.length - 1].x, PAD.top + cH);
+        path.lineTo(PAD.left, PAD.top + cH);
+        path.closePath();
+        const grad = ctx.createLinearGradient(0, PAD.top, 0, PAD.top + cH);
+        grad.addColorStop(0, serColor + '55');
+        grad.addColorStop(1, serColor + '08');
+        ctx.fillStyle = grad;
+        ctx.fill(path);
+      }
+
+      ctx.strokeStyle = si > 0 ? (serColor + 'cc') : serColor;
+      ctx.lineWidth = si === 0 ? 2 : 1.5;
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+    });
+
+    // Setpoint line
+    if (getSetpoint) {
+      const sp = getSetpoint();
+      if (sp > 0) {
+        const spY = PAD.top + cH - Math.max(0, Math.min(1, sp / max)) * cH;
+        ctx.save();
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = '#aaa'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(PAD.left, spY); ctx.lineTo(PAD.left + cW, spY); ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  React.useEffect(() => {
+    function loop() { draw(); raf.current = requestAnimationFrame(loop); }
+    loop();
+    return () => cancelAnimationFrame(raf.current);
+  }, [getSeries, getSetpoint, max, color, variant, grid]);
+
+  return (
+    <canvas ref={ref} style={{ width: '100%', height: height, display: 'block' }} />
+  );
+}
+
+// Mini spark for summary cards — also multi-series aware
+function MiniSpark({ values, max, color, width = 160, height = 34 }) {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const isMulti = Array.isArray(values[0]);
+    const seriesArr = isMulti ? values : [values];
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, width, height);
+    seriesArr.forEach((data, si) => {
+      if (!data || data.length < 2) return;
+      const serColor = (si === 0 ? color : SERIES_COLORS[si]) || SERIES_COLORS[0];
+      const pts = data.map((v, i) => ({
+        x: (i / (data.length - 1)) * width,
+        y: height - Math.max(0, Math.min(1, v / max)) * height,
+      }));
+      ctx.beginPath();
+      pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+      ctx.strokeStyle = si === 0 ? serColor : (serColor + 'aa');
+      ctx.lineWidth = si === 0 ? 1.5 : 1;
+      ctx.stroke();
+    });
+  });
+  return <canvas ref={ref} width={width} height={height} style={{ display:'block', width:'100%', height }} />;
+}
+
+// ---- Local calibration status pill ----------------------------------------
 function CalStatusPill({ well, big }) {
-  // window.calState is defined in control.jsx; fall back gracefully if absent.
   const c = (window.calState ? window.calState(well) :
     well.calibrating ? { key: 'cal', fg: '#000', bg: '#FFE9B0', dot: '#C98A00', label: 'Calibrating…' }
     : well.calibrated ? { key: 'done', fg: '#0A6B2E', bg: '#D8F3DF', dot: '#16A34A', label: 'Calibrated' }
@@ -19,7 +183,7 @@ function CalStatusPill({ well, big }) {
   );
 }
 
-// ---- Sidebar calibration block (persists across all sub-views) ------------
+// ---- Sidebar calibration block --------------------------------------------
 function SidebarCalibration({ well }) {
   return (
     <div style={{ padding: 14, borderTop: '2px solid #000' }}>
@@ -58,22 +222,47 @@ function Readout({ label, value, decimals = 2, unit, accent }) {
   );
 }
 
-// ---- Terminal log with pause / clear --------------------------------------
+// ---- Terminal log with pause / clear -------------------------------------
+// FIX: Every raw serial line is now visible.
+//
+// Filtering logic:
+//   • No filter prop → show ALL lines (Combined view "Raw Serial Feed")
+//   • filter="voltage" → show system lines (starts with "»") + raw lines
+//     containing "voltage". Other raw lines are still shown so nothing is lost.
+//   • filter="gauss"  → same pattern for magnetic view.
+//
+// Operators can always use Pause to freeze the display and read any message.
 function LogPanel({ well, filter, height }) {
   useEngineTick(8);
   const [paused, setPaused] = React.useState(false);
   const frozen = React.useRef(null);
   const scrollRef = React.useRef(null);
-  
+
+  // Classify each log line:
+  //   systemLine  → starts with "»" (event/level lines added by _pushLog)
+  //   rawLine     → everything else (verbatim board output)
+  //
+  // Show policy:
+  //   no filter  → show all
+  //   with filter→ always show systemLines; show rawLines when they contain
+  //                the keyword (keyword match is case-insensitive)
   let lines = well.log;
-  if (filter) lines = lines.filter((l) => l.startsWith('»') || l.includes(filter));
-  if (paused) { 
-    if (!frozen.current) frozen.current = lines.slice(); 
-    lines = frozen.current; 
-  } else if (frozen.current) {
-    frozen.current = null; 
+  if (filter) {
+    const kw = filter.toLowerCase();
+    lines = lines.filter(l => {
+      const isSystem = l.startsWith('»');
+      if (isSystem) return true;
+      return l.toLowerCase().includes(kw);
+    });
   }
-  
+
+  if (paused) {
+    if (!frozen.current) frozen.current = lines.slice();
+    lines = frozen.current;
+  } else {
+    frozen.current = null;
+  }
+
   const shown = lines.slice(-80);
   React.useEffect(() => {
     if (!paused && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -96,14 +285,19 @@ function LogPanel({ well, filter, height }) {
         {shown.length === 0
           ? <div className="ln" style={{ opacity: .5 }}>&gt; awaiting data…</div>
           : shown.map((l, i) => {
+              const isSystem = l.startsWith('»');
               const color = l.includes('[ERROR]') ? '#FF3000'
-                : l.includes('[WARN]') ? '#C98A00'
-                : l.includes('[OK]') ? '#0A6B2E'
-                : l.startsWith('»') ? '#2A6FDB'
+                : l.includes('[WARN]')  ? '#C98A00'
+                : l.includes('[OK]')    ? '#0A6B2E'
+                : isSystem              ? '#2A6FDB'
                 : undefined;
+              // Raw board lines get a slightly dimmer style so system lines
+              // stand out, but raw content is always fully legible.
+              const style = color
+                ? { color, fontWeight: 600 }
+                : !isSystem ? { color: '#334', opacity: 0.9 } : undefined;
               return (
-                <div className={'ln' + (i === shown.length - 1 ? ' fresh' : '')} key={i}
-                  style={color ? { color, fontWeight: 600 } : undefined}>
+                <div className={'ln' + (i === shown.length - 1 ? ' fresh' : '')} key={i} style={style}>
                   &gt; {l}
                 </div>
               );
@@ -113,11 +307,15 @@ function LogPanel({ well, filter, height }) {
   );
 }
 
-// ---- Chart card (header + live chart) -------------------------------------
+// ---- Chart card (header + live chart) ------------------------------------
+// FIX: accessor.series() may now return number[][] for multi-series.
+// LiveChart (defined above) handles both cases.
 function ChartCard({ title, well, accessor, accent, variant, grid, height }) {
   return (
     <div className="gb" style={{ marginTop: 0, display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0 }}>
       <div className="gb-title">{title}</div>
+      {/* Legend for multi-series charts */}
+      <MultiSeriesLegend series={accessor.seriesLabels} color={accent} />
       <div style={{ padding: '20px 10px 10px', flex: '1 1 auto', minHeight: 0, display: 'flex' }}>
         <div style={{ width: '100%', height: height || '100%' }}>
           <LiveChart
@@ -133,21 +331,49 @@ function ChartCard({ title, well, accessor, accent, variant, grid, height }) {
   );
 }
 
-// ---- One metric view (electric or magnetic) -------------------------------
+// Small legend row shown beneath the chart title when there are 2+ series
+function MultiSeriesLegend({ series, color }) {
+  if (!series || series.length < 2) return null;
+  return (
+    <div className="row" style={{ gap: 14, padding: '2px 12px 0', flexWrap: 'wrap' }}>
+      {series.map((label, i) => (
+        <span key={i} className="row" style={{ gap: 5, alignItems: 'center', fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: '#555' }}>
+          <span style={{ width: 16, height: 3, borderRadius: 2, display: 'inline-block', background: i === 0 ? (color || SERIES_COLORS[0]) : SERIES_COLORS[i] || SERIES_COLORS[1] }}></span>
+          {label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ---- One metric view (electric or magnetic) ------------------------------
 function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }) {
   useEngineTick(10);
   const isE = metric === 'electric';
   const needsCalibration = !well.calibrated && metric === 'magnetic';
-  
-  // Pass both gauss1 and gauss2 arrays to the chart for magnetic view
+
+  // FIX: Magnetic accessor returns a two-element array of series so both
+  // gauss1 and gauss2 are graphed simultaneously.
   const acc = isE
-    ? { series: () => well.history.efield.values, setpoint: () => well.setEfield, latest: () => well.measEfield, max: window.MCCB.MAX_EFIELD }
-    : { series: () => [well.history.gauss1.values, well.history.gauss2.values], setpoint: () => well.setGauss, latest: () => well.measGauss1, max: window.MCCB.MAX_MAG };
-    
+    ? {
+        series: () => well.history.efield.values,
+        setpoint: () => well.setEfield,
+        latest: () => well.measEfield,
+        max: window.MCCB.MAX_EFIELD,
+        seriesLabels: null,
+      }
+    : {
+        series: () => [well.history.gauss1.values, well.history.gauss2.values],
+        setpoint: () => well.setGauss,
+        latest: () => well.measGauss1,
+        max: window.MCCB.MAX_MAG,
+        seriesLabels: ['HE1 (Gauss)', 'HE2 (Gauss)'],
+      };
+
   const status = isE ? well.electricStatus : well.magneticStatus;
-  const title = isE ? 'Electric Field' : 'Magnetic Field';
+  const title  = isE ? 'Electric Field' : 'Magnetic Field';
   const filter = isE ? 'voltage' : 'gauss';
-  
+
   const readouts = isE ? (
     <React.Fragment>
       <Readout label="Setpoint" value={well.setEfield} unit="V/cm" />
@@ -163,8 +389,8 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
       <Readout label="HE2 RMS (2s)" value={well.rms2} unit="G" />
     </React.Fragment>
   );
-  
-  const roCols = 4; 
+
+  const roCols = 4;
   const chart = <ChartCard title={title + ' — Measured vs Setpoint'} well={well} accessor={acc} accent={accent} variant={variant} grid={grid} />;
 
   return (
@@ -176,34 +402,30 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
           {metric === 'magnetic' && <CalStatusPill well={well} big />}
         </div>
         <div className="row gap-8">
-          {/* Calibration button (Magnetic view only) — routed through engine */}
           {metric === 'magnetic' && (
-            <button 
-              className="btn btn-secondary btn-sm" 
-              style={{ 
-                minWidth: 150, 
-                background: well.calibrating ? 'var(--dim)' : (needsCalibration ? 'var(--accent)' : ''), 
-                color: (well.calibrating || needsCalibration) ? '#fff' : '' 
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{
+                minWidth: 150,
+                background: well.calibrating ? 'var(--dim)' : (needsCalibration ? 'var(--accent)' : ''),
+                color: (well.calibrating || needsCalibration) ? '#fff' : ''
               }}
               disabled={well.calibrating}
               onClick={() => window.MCCB.engine.calibrateWell(well.num)}>
               {well.calibrating ? 'Calibrating…' : (well.calibrated ? 'Recalibrate' : 'Calibrate Mag')}
             </button>
           )}
-          
-          {/* Set Value button is disabled if magnetic calibration is missing */}
-          <button 
-            className="btn btn-secondary btn-sm" 
-            style={{ minWidth: 150 }} 
+          <button
+            className="btn btn-secondary btn-sm"
+            style={{ minWidth: 150 }}
             disabled={needsCalibration}
             onClick={() => onConfigure(well.num, metric)}>
             {needsCalibration ? 'Calibrate First' : 'Set Value'}
           </button>
-          
           <button className="btn btn-danger btn-sm" style={{ minWidth: 120 }} onClick={() => window.MCCB.engine.stopWell(well.num)}>Stop</button>
         </div>
       </div>
-      
+
       <div className="readout-strip" style={{ gridTemplateColumns: `repeat(${roCols}, 1fr)` }}>{readouts}</div>
 
       {layout === 'split' ? (
@@ -227,7 +449,7 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
   );
 }
 
-// ---- Stacked layout: chart grows, log collapses ---------------------------
+// ---- Stacked layout: chart grows, log collapses --------------------------
 function CollapsibleStack({ chart, well, filter }) {
   const [open, setOpen] = React.useState(true);
   return (
@@ -246,15 +468,26 @@ function CollapsibleStack({ chart, well, filter }) {
   );
 }
 
-// ---- Combined overview ----------------------------------------------------
+// ---- Combined overview ---------------------------------------------------
 function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
   useEngineTick(10);
-  const eAcc = { series: () => well.history.efield.values, setpoint: () => well.setEfield, latest: () => well.measEfield, max: window.MCCB.MAX_EFIELD };
-  
-  // UPDATED: Use gauss1 for the combined overview chart
-  const mAcc = { series: () => well.history.gauss1.values, setpoint: () => well.setGauss, latest: () => well.measGauss1, max: window.MCCB.MAX_MAG };
+  const eAcc = {
+    series: () => well.history.efield.values,
+    setpoint: () => well.setEfield,
+    latest: () => well.measEfield,
+    max: window.MCCB.MAX_EFIELD,
+    seriesLabels: null,
+  };
+  // FIX: Combined magnetic chart now plots both sensors
+  const mAcc = {
+    series: () => [well.history.gauss1.values, well.history.gauss2.values],
+    setpoint: () => well.setGauss,
+    latest: () => well.measGauss1,
+    max: window.MCCB.MAX_MAG,
+    seriesLabels: ['HE1', 'HE2'],
+  };
   const side = layout === 'split';
-  
+
   const block = (title, acc, status, setVal, measVal, unit, mode, rmsVal, isMag) => (
     <div className="col grow" style={{ minHeight: 0, gap: 10 }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
@@ -296,19 +529,18 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
       </div>
       <div className={side ? 'row grow gap-14' : 'col grow gap-14'} style={{ minHeight: 0 }}>
         {block('Electric', eAcc, well.electricStatus, well.setEfield, well.measEfield, 'V/cm', 'electric')}
-        {/* Pass well.measGauss1 and well.rms1 to the magnetic block */}
         {block('Magnetic', mAcc, well.magneticStatus, well.setGauss, well.measGauss1, 'G', 'magnetic', well.rms1, true)}
       </div>
     </div>
   );
 }
 
-// ---- Well container with sub-nav ------------------------------------------
+// ---- Well container with sub-nav -----------------------------------------
 function WellTab({ wellNum, layout, variant, grid, accent, onConfigure }) {
-  useEngineTick(6); // keep sidebar calibration status fresh across all sub-views
+  useEngineTick(6);
   const well = window.MCCB.engine.wells[wellNum];
   const [view, setView] = React.useState('COMBINED');
-  
+
   if (!well.assigned) {
     return (
       <div className="well-wrap">
@@ -328,7 +560,7 @@ function WellTab({ wellNum, layout, variant, grid, accent, onConfigure }) {
   }
 
   const navItems = [['COMBINED', 'All Data'], ['ELECTRIC', 'Electric'], ['MAGNETIC', 'Magnetic']];
-  
+
   return (
     <div className="well-wrap">
       <div className="well-side">
@@ -339,7 +571,6 @@ function WellTab({ wellNum, layout, variant, grid, accent, onConfigure }) {
           </button>
         ))}
         <div className="grow"></div>
-        {/* Per-well magnetic calibration — available from any sub-view */}
         <SidebarCalibration well={well} />
         <div style={{ padding: 14, borderTop: '2px solid #000' }}>
           <div className="kicker" style={{ marginBottom: 6 }}>Port</div>

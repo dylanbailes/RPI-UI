@@ -1,14 +1,17 @@
 /* ============================================================================
 data.js — MCCB telemetry engine + hardware seam (REAL HARDWARE MODE)
+FIX: Raw serial lines are now properly pushed to well.log so the UI serial
+     feed shows every message. Two-float telemetry ("21.2 31.5") is ingested
+     into gauss1/gauss2 and both history rings are updated.
 ========================================================================== */
 (function () {
 'use strict';
 
 // ---- Safety limits ------------------------------------------------------
 const MAX_EFIELD = 1.5;   // V/cm
-const MAX_MAG    = 50.0;  // Gauss (UPDATED from 15.0)
-const HISTORY    = 10000; // 2 seconds of data at 5kHz (UPDATED from 240)
-const TICK_MS    = 100;   
+const MAX_MAG    = 50.0;  // Gauss
+const HISTORY    = 10000; // 2 seconds of data at 5kHz
+const TICK_MS    = 100;
 
 const ELECTRODE_GAP_CM = 0.5;
 
@@ -25,23 +28,18 @@ function buildReverseLutFromArr(lutArr) {
 // =========================================================================
 // ---- LOOKUP TABLES (PWM % -> Physical Value) ----------------------------
 // =========================================================================
-// These tables map 0.1% PWM increments to physical values.
-// REPLACE the placeholder generator below with your actual calibration data!
-// Format: { 0.0: 0.0, 0.1: 0.05, 0.2: 0.10, ... 100.0: 50.0 }
-
 function generatePlaceholderLut(maxVal) {
   const lut = {};
   for (let i = 0; i <= 1000; i++) {
-    lut[i / 10.0] = (i / 1000.0) * maxVal; // Linear placeholder
+    lut[i / 10.0] = (i / 1000.0) * maxVal;
   }
   return lut;
 }
 
 // TODO: Replace these with your real calibration dictionaries
-const PWM_TO_GAUSS  = generatePlaceholderLut(50.0); 
+const PWM_TO_GAUSS  = generatePlaceholderLut(50.0);
 const PWM_TO_EFIELD = generatePlaceholderLut(1.5);
 
-// Invert LUTs for fast Physical -> PWM lookup
 function buildReverseLut(forwardLut) {
   const reverse = [];
   const keys = Object.keys(forwardLut).map(Number).sort((a, b) => a - b);
@@ -52,18 +50,15 @@ function buildReverseLut(forwardLut) {
 const GAUSS_LUT  = buildReverseLut(PWM_TO_GAUSS);
 const EFIELD_LUT = buildReverseLut(PWM_TO_EFIELD);
 
-// Interpolates the exact PWM % for a target physical value.
-// Single definition — guards against empty/missing LUTs.
 function physicalToPwm(target, lut) {
   if (!lut || lut.length === 0) return 0.0;
   if (target <= 0) return 0.0;
   if (target >= lut[lut.length - 1].val) return lut[lut.length - 1].pwm;
-
   for (let i = 1; i < lut.length; i++) {
     if (target <= lut[i].val) {
       const p0 = lut[i - 1], p1 = lut[i];
       const ratio = (target - p0.val) / (p1.val - p0.val);
-      return p0.pwm + ratio * (p1.pwm - p0.pwm); // Linear interpolation
+      return p0.pwm + ratio * (p1.pwm - p0.pwm);
     }
   }
   return lut[lut.length - 1].pwm;
@@ -90,7 +85,7 @@ class WellDevice {
     this.measEfield = 0;
     this.measGauss1 = 0;
     this.measGauss2 = 0;
-    this._sumSq1 = 0; 
+    this._sumSq1 = 0;
     this._sumSq2 = 0;
     this.voltage = 0;
     this.current = 0;
@@ -108,6 +103,9 @@ class WellDevice {
       voltage: new Ring(HISTORY),
       current: new Ring(HISTORY),
     };
+    // log stores both raw serial lines and system event lines.
+    // Raw lines come in as plain strings (from "raw" level backend messages).
+    // System/event lines are prefixed with "» [LEVEL] " for easy filtering.
     this.log = [];
   }
 
@@ -130,10 +128,12 @@ class WellDevice {
     return len > 0 ? Math.sqrt(this._sumSq2 / len) : 0;
   }
 
+  // _ingest handles JSON telemetry objects from the backend.
+  // Both gauss1 and gauss2 are updated and tracked in their own history rings.
   _ingest(obj) {
     if ('efield' in obj) this.history.efield.push(obj.efield);
     else if ('voltage' in obj) this.history.efield.push(obj.voltage / ELECTRODE_GAP_CM);
-    
+
     if ('gauss1' in obj) {
       const v = obj.gauss1;
       const ring = this.history.gauss1;
@@ -155,11 +155,16 @@ class WellDevice {
     if ('current' in obj) { this.current = obj.current; this.history.current.push(obj.current); }
     if ('coil' in obj) this.coilCurrent = obj.coil;
     if ('efield' in obj) this.measEfield = obj.efield;
+  }
 
-    const line = JSON.stringify(obj);
-    this.log.push(line);
-    if (this.log.length > 400) this.log.shift();
-    return line;
+  // _pushLog is called for every line received over serial, regardless of type.
+  // Raw lines (level === 'raw') are stored verbatim so the serial feed shows them.
+  // System lines (level === info/ok/warn/error) get a "» [LEVEL]" prefix so
+  // LogPanel can distinguish them from raw telemetry for filtered views.
+  _pushLog(level, line) {
+    const entry = level === 'raw' ? line : `» [${level.toUpperCase()}] ${line}`;
+    this.log.push(entry);
+    if (this.log.length > 600) this.log.shift();
   }
 
   reset() {
@@ -182,7 +187,7 @@ let cachedCameras = [];
 function connectToBackend() {
   const wsUrl = `ws://${window.location.hostname}:8000/ws/hardware`;
   ws = new WebSocket(wsUrl);
-  
+
   ws.onopen = () => {
     wsConnected = true;
     sendToBackend({ cmd: 'enumerate_ports' });
@@ -216,6 +221,17 @@ function handleBackendMessage(msg) {
       engine.wells[wellNum]._ingest(msg.data);
       engine._emit();
     }
+  } else if (msg.type === 'log') {
+    // ALL serial lines — both raw board output and system events — come through
+    // this path. Push every one to the well's log so the UI serial feed is complete.
+    const wellNum = msg.well;
+    const w = engine.wells[wellNum];
+    if (w) {
+      const level = msg.data.level || 'info';
+      const line  = msg.data.line  || '';
+      w._pushLog(level, line);
+      engine._emit();
+    }
   } else if (msg.type === 'ports') {
     cachedPorts = msg.data;
     window.dispatchEvent(new CustomEvent('mccb_ports_ready', { detail: msg.data }));
@@ -225,18 +241,18 @@ function handleBackendMessage(msg) {
   } else if (msg.type === 'calibration') {
     const wellNum = msg.well;
     if (engine.wells[wellNum]) {
-        engine.wells[wellNum].gaussLut = msg.data.lut;
-        engine.wells[wellNum].calibrated = true;
-        engine.wells[wellNum].calibrating = false;
-        engine.wells[wellNum].reverseGaussLut = buildReverseLutFromArr(msg.data.lut);
-        engine._emit();
+      engine.wells[wellNum].gaussLut = msg.data.lut;
+      engine.wells[wellNum].calibrated = true;
+      engine.wells[wellNum].calibrating = false;
+      engine.wells[wellNum].reverseGaussLut = buildReverseLutFromArr(msg.data.lut);
+      engine._emit();
     }
   } else if (msg.type === 'cal_status') {
     const wellNum = msg.well;
     if (engine.wells[wellNum]) {
-        engine.wells[wellNum].calibrating = (msg.data.status === 'running');
-        if (msg.data.status === 'done') engine.wells[wellNum].calibrating = false;
-        engine._emit();
+      engine.wells[wellNum].calibrating = (msg.data.status === 'running');
+      if (msg.data.status === 'done') engine.wells[wellNum].calibrating = false;
+      engine._emit();
     }
   } else if (msg.type === 'flash_status') {
     const wellNum = msg.well;
@@ -253,19 +269,6 @@ function handleBackendMessage(msg) {
       }
       engine._emit();
     }
-  } else if (msg.type === 'log') {
-    const wellNum = msg.well;
-    const w = engine.wells[wellNum];
-    if (w) {
-      const level = msg.data.level || 'info';
-      const line = msg.data.line || '';
-      // Raw firmware lines pass through verbatim; system/event lines get a
-      // leading marker so the per-metric log filter never hides them.
-      const formatted = level === 'raw' ? line : `» [${level.toUpperCase()}] ${line}`;
-      w.log.push(formatted);
-      if (w.log.length > 400) w.log.shift();
-      engine._emit();
-    }
   }
 }
 
@@ -280,7 +283,7 @@ class Engine {
     this.running = false;
     this.globalStopped = false;
   }
-  
+
   subscribe(cb) { this._subs.add(cb); return () => this._subs.delete(cb); }
   _emit() { this._subs.forEach((cb) => cb(this)); }
 
@@ -290,11 +293,11 @@ class Engine {
   assign(map, doFlash = true) {
     for (let i = 1; i <= 4; i++) {
       const w = this.wells[i];
-      if (map[i]) { 
-        w.assigned = true; w.port = map[i].port; w.label = map[i].label; 
+      if (map[i]) {
+        w.assigned = true; w.port = map[i].port; w.label = map[i].label;
         sendToBackend({ cmd: 'connect_well', well: i, port: map[i].port, flash: !!doFlash });
-      } else { 
-        w.assigned = false; w.reset(); 
+      } else {
+        w.assigned = false; w.reset();
         sendToBackend({ cmd: 'disconnect_well', well: i });
       }
     }
@@ -303,17 +306,13 @@ class Engine {
   setParams(wellNum, { efield, gauss }) {
     const w = this.wells[wellNum];
     if (!w || !w.assigned) return;
-
     this.globalStopped = false;
 
-    // Electric field has no LUT yet — scale linearly. Not gated by calibration.
     if (efield != null) {
       w.setEfield = clamp(efield, 0, MAX_EFIELD);
       this._command({ cmd: 'set', well: wellNum, channel: 'e', pwm: w.setEfield * (100.0 / MAX_EFIELD) });
     }
-
     if (gauss != null) {
-      // ENFORCE CALIBRATION — only blocks the magnetic channel, not electric.
       if (!w.calibrated) {
         console.warn("Cannot set Gauss: Well not calibrated!");
         window.dispatchEvent(new CustomEvent('mccb_toast', { detail: { kind: 'error', text: `Well ${wellNum} requires magnetic calibration first.` } }));
@@ -327,28 +326,21 @@ class Engine {
 
   _command(obj) { sendToBackend(obj); }
 
-  // ---- Calibration --------------------------------------------------------
-  // Initiate a magnetic sweep on a single well. Marks the well as calibrating
-  // optimistically so the UI reflects it immediately; the backend confirms via
-  // cal_status / calibration messages handled in handleBackendMessage().
   calibrateWell(wellNum) {
     const w = this.wells[wellNum];
     if (!w || !w.assigned || w.calibrating) return;
     w.calibrating = true;
-    w.log.push('» [INFO] Calibration requested — sent "c" to device, waiting for CAL_START…');
-    if (w.log.length > 400) w.log.shift();
+    w._pushLog('info', 'Calibration requested — sent "c" to device, waiting for CAL_START…');
     this._command({ cmd: 'calibrate', well: wellNum });
     this._emit();
   }
 
-  // Kick off calibration on every assigned well that isn't already running.
   calibrateAll() {
     let started = 0;
     for (const w of Object.values(this.wells)) {
       if (w.assigned && !w.calibrating) {
         w.calibrating = true;
-        w.log.push('» [INFO] Calibration requested — sent "c" to device, waiting for CAL_START…');
-        if (w.log.length > 400) w.log.shift();
+        w._pushLog('info', 'Calibration requested — sent "c" to device, waiting for CAL_START…');
         this._command({ cmd: 'calibrate', well: w.num });
         started++;
       }
