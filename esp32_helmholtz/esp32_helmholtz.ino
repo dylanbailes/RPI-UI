@@ -149,22 +149,19 @@ float measureGaussAtPwm(float pwmPercent) {
     float duty = (pwmPercent / 100.0) * PWM_MAX_VALUE;
     applyBipolarPWM(HELM_IN1_PIN, HELM_IN2_PIN, duty, lastHelmPwm1, lastHelmPwm2, HELM_PWM_FREQ_HZ);
     
-    // Wait for coil L/R time constant to settle
+    // This delay yields to the FreeRTOS scheduler, allowing the Idle Task 
+    // to run and safely feed the Watchdog Timer automatically.
     delay(300); 
     
-    // Average 400 samples (200ms) for high noise rejection
     long sum1 = 0;
     int samples = 400;
     for(int i=0; i<samples; i++) {
         sum1 += analogRead(HE1_PIN);
-        delayMicroseconds(500); 
+        delayMicroseconds(500);
     }
-
-    // Feed the Task WDT — each measurement takes ~500ms and the refinement
-    // loop can call this dozens of times back-to-back, easily exceeding the
-    // default 5s WDT timeout without an explicit reset here.
-    esp_task_wdt_reset();
-
+    
+    // REMOVED: esp_task_wdt_reset(); 
+    
     float rawAvg = (float)sum1 / samples;
     return (rawAvg - he1ZeroOffset) / COUNTS_PER_GAUSS;
 }
@@ -262,9 +259,12 @@ void calibrateMagneticLut() {
 // We subscribe on entry and unsubscribe before deletion so the watchdog
 // never fires on this task regardless of how long the sweep takes.
 void calibrationTask(void *pv) {
-    esp_task_wdt_add(NULL);      // subscribe THIS task to the TWDT
+    // REMOVED: esp_task_wdt_add(NULL);
+    
     calibrateMagneticLut();
-    esp_task_wdt_delete(NULL);   // unsubscribe before self-deletion
+    
+    // REMOVED: esp_task_wdt_delete(NULL);
+    
     calTaskHandle = NULL;
     vTaskDelete(NULL);
 }
