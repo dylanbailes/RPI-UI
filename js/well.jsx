@@ -35,13 +35,17 @@ function StatusPill({ status, big }) {
   return <span style={{ display:'inline-flex', alignItems:'center', gap:4, background:bg, borderRadius:2, padding:'2px 7px', fontSize:10, fontWeight:700 }}><span style={{ width:6,height:6,borderRadius:'50%',background:dot,display:'inline-block' }}></span>{status}</span>;
 }
 function useEngineTick(fps = 10) {
-  if (window.useEngineTick) { window.useEngineTick(fps); return; }
   const [, force] = React.useReducer(x => x + 1, 0);
   React.useEffect(() => {
     if (!window.MCCB || !window.MCCB.engine) return;
-    const unsub = window.MCCB.engine.subscribe(() => force());
+    let last = 0;
+    const minDt = 1000 / fps;
+    const unsub = window.MCCB.engine.subscribe(() => {
+      const now = performance.now();
+      if (now - last >= minDt) { last = now; force(); }
+    });
     return () => unsub && unsub();
-  }, []);
+  }, [fps]);
 }
 
 // ---- Multi-series SVG chart (inline — avoids dependency on charts.jsx) ----
