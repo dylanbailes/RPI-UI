@@ -226,6 +226,23 @@ function Readout({ label, value, decimals = 2, unit, accent }) {
   );
 }
 
+// StaticReadout: like Readout but skips AnimatedNumber.
+// Use for RMS and any value where tween drift would produce misleading
+// intermediate states (e.g. a sliding-window RMS that updates every frame).
+function StaticReadout({ label, value, decimals = 2, unit, accent }) {
+  return (
+    <div className={'readout' + (accent ? ' accent' : '')}>
+      <div className="ro-label">{label}</div>
+      <div>
+        <span className="ro-value" style={{ fontVariantNumeric: 'tabular-nums' }}>
+          {Number(value).toFixed(decimals)}
+        </span>
+        {unit && <span className="ro-unit">{unit}</span>}
+      </div>
+    </div>
+  );
+}
+
 // ---- Terminal log with pause / clear -------------------------------------
 // FIX: Every raw serial line is now visible.
 //
@@ -388,9 +405,9 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
   ) : (
     <React.Fragment>
       <Readout label="HE1 Inst." value={well.measGauss1} unit="G" accent />
-      <Readout label="HE1 RMS (2s)" value={well.rms1} unit="G" />
+      <StaticReadout label="HE1 RMS (2s)" value={well.rms1} unit="G" />
       <Readout label="HE2 Inst." value={well.measGauss2} unit="G" accent />
-      <Readout label="HE2 RMS (2s)" value={well.rms2} unit="G" />
+      <StaticReadout label="HE2 RMS (2s)" value={well.rms2} unit="G" />
     </React.Fragment>
   );
 
@@ -492,7 +509,7 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
   };
   const side = layout === 'split';
 
-  const block = (title, acc, status, setVal, measVal, unit, mode, rmsVal, isMag) => (
+  const block = (title, acc, status, setVal, measVal, unit, mode, rmsVal, isMag, measVal2, rmsVal2) => (
     <div className="col grow" style={{ minHeight: 0, gap: 10 }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
         <div className="row gap-12" style={{ alignItems: 'center' }}>
@@ -502,10 +519,39 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
         </div>
         <div className="row gap-16" style={{ alignItems: 'baseline' }}>
           <span className="kicker">SET <span className="mono" style={{ color: '#000', fontSize: 14 }}>{setVal.toFixed(2)}</span></span>
-          <span className="mono" style={{ fontSize: 22, fontWeight: 700, color: accent }}>
-            <AnimatedNumber value={measVal} decimals={2} /><span className="ro-unit">{unit}</span>
-          </span>
-          {rmsVal !== undefined && rmsVal !== null && (
+          {/* For magnetic: show HE1 and HE2 side-by-side; for electric: single value */}
+          {isMag ? (
+            <span className="row gap-10" style={{ alignItems: 'baseline' }}>
+              <span>
+                <span className="kicker" style={{ fontSize: 10 }}>HE1 </span>
+                <span className="mono" style={{ fontSize: 20, fontWeight: 700, color: accent }}>
+                  <AnimatedNumber value={measVal} decimals={2} /><span className="ro-unit">{unit}</span>
+                </span>
+                {rmsVal !== undefined && rmsVal !== null && (
+                  <span className="kicker" style={{ color: 'var(--dim)', marginLeft: 4 }}>
+                    RMS <span className="mono" style={{ color: 'var(--ink)', fontSize: 13 }}>{rmsVal.toFixed(2)}</span>
+                  </span>
+                )}
+              </span>
+              <span style={{ color: '#ccc', fontWeight: 300 }}>|</span>
+              <span>
+                <span className="kicker" style={{ fontSize: 10 }}>HE2 </span>
+                <span className="mono" style={{ fontSize: 20, fontWeight: 700, color: SERIES_COLORS[1] }}>
+                  <AnimatedNumber value={measVal2} decimals={2} /><span className="ro-unit">{unit}</span>
+                </span>
+                {rmsVal2 !== undefined && rmsVal2 !== null && (
+                  <span className="kicker" style={{ color: 'var(--dim)', marginLeft: 4 }}>
+                    RMS <span className="mono" style={{ color: 'var(--ink)', fontSize: 13 }}>{rmsVal2.toFixed(2)}</span>
+                  </span>
+                )}
+              </span>
+            </span>
+          ) : (
+            <span className="mono" style={{ fontSize: 22, fontWeight: 700, color: accent }}>
+              <AnimatedNumber value={measVal} decimals={2} /><span className="ro-unit">{unit}</span>
+            </span>
+          )}
+          {!isMag && rmsVal !== undefined && rmsVal !== null && (
             <span className="kicker" style={{ color: 'var(--dim)' }}>
               RMS: <span className="mono" style={{ color: 'var(--ink)', fontSize: 14 }}>{rmsVal.toFixed(2)}</span>
             </span>
@@ -533,7 +579,7 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
       </div>
       <div className={side ? 'row grow gap-14' : 'col grow gap-14'} style={{ minHeight: 0 }}>
         {block('Electric', eAcc, well.electricStatus, well.setEfield, well.measEfield, 'V/cm', 'electric')}
-        {block('Magnetic', mAcc, well.magneticStatus, well.setGauss, well.measGauss1, 'G', 'magnetic', well.rms1, true)}
+        {block('Magnetic', mAcc, well.magneticStatus, well.setGauss, well.measGauss1, 'G', 'magnetic', well.rms1, true, well.measGauss2, well.rms2)}
       </div>
     </div>
   );

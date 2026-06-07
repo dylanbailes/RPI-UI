@@ -237,23 +237,45 @@ class WellDevice {
   // ---- Ingest a telemetry object from the backend ---------------------
   // measGauss1/2 are read from ring.last AFTER push, so they always
   // reflect the newest sample even during a burst of 50+ rapid updates.
+  //
+  // Also handles raw serial strings in the form "24.56 26.32"
+  // (HE1 HE2, space-separated floats) that arrive before the backend
+  // has a chance to parse them into structured JSON.
   _ingest(obj) {
+    // --- Raw string fallback: "24.56 26.32" or "24.56 26.32 ..." -----
+    if (typeof obj === 'string') {
+      const parts = obj.trim().split(/\s+/).map(Number);
+      // Reject if any part is NaN or negative (bad/partial line)
+      if (parts.length >= 2 && parts.every(v => !isNaN(v) && v >= 0)) {
+        obj = { gauss1: parts[0], gauss2: parts[1] };
+      } else {
+        return; // not a recognisable sensor line — ignore
+      }
+    }
+
     if ('efield' in obj) {
       this.history.efield.push(obj.efield);
       this.measEfield = this.history.efield.last;
-    } else if ('voltage' in obj) {
+    } else if ('voltage' in obj && !('gauss1' in obj)) {
+      // Voltage-only packet → derive E-field
       this.history.efield.push(obj.voltage / ELECTRODE_GAP_CM);
     }
 
     if ('gauss1' in obj) {
-      this.history.gauss1.push(obj.gauss1);
-      this._rms1.push(obj.gauss1);
-      this.measGauss1 = this.history.gauss1.last;
+      const g1 = obj.gauss1;
+      if (!isNaN(g1) && g1 >= 0) {   // guard: reject negative/NaN at ingest
+        this.history.gauss1.push(g1);
+        this._rms1.push(g1);
+        this.measGauss1 = this.history.gauss1.last;
+      }
     }
     if ('gauss2' in obj) {
-      this.history.gauss2.push(obj.gauss2);
-      this._rms2.push(obj.gauss2);
-      this.measGauss2 = this.history.gauss2.last;
+      const g2 = obj.gauss2;
+      if (!isNaN(g2) && g2 >= 0) {   // guard: reject negative/NaN at ingest
+        this.history.gauss2.push(g2);
+        this._rms2.push(g2);
+        this.measGauss2 = this.history.gauss2.last;
+      }
     }
 
     if ('voltage' in obj) { this.voltage = obj.voltage; this.history.voltage.push(obj.voltage); }
@@ -326,7 +348,17 @@ function handleBackendMessage(msg) {
     const wellNum = msg.data.well;
     const w = engine.wells[wellNum];
     if (w) {
-      w._pushLog(msg.data.level || 'info', msg.data.line || '');
+      const line = msg.data.line || '';
+      // If the raw line looks like sensor data ("24.56 26.32"), ingest it
+      // directly so measGauss1/2 and RMS are updated even when the backend
+      // hasn't parsed it into a structured telemetry packet yet.
+      if (msg.data.level === 'raw') {
+        const parts = line.trim().split(/\s+/).map(Number);
+        if (parts.length >= 2 && parts.every(v => !isNaN(v) && v >= 0)) {
+          w._ingest(line);  // _ingest handles the string-format path
+        }
+      }
+      w._pushLog(msg.data.level || 'info', line);
       engine._scheduleEmit();
     }
   } else if (msg.type === 'ports') {
