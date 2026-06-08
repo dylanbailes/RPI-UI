@@ -1,7 +1,22 @@
 import React from 'react';
 import { useEffect, useState, useRef } from 'react';
 
-// ---- Camera tile (Real Hardware Feed) -------------------------------------
+// Scoped layout override. We do NOT rely on .tab-page / .cam-grid / .cam-tile
+// establishing height — we force the full flex/grid height chain ourselves so
+// the camera stage always fills the available space on the kiosk.
+const LAYOUT_CSS = `
+.mccb-img{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;height:100%;}
+.mccb-img .img-row{display:flex;flex-direction:row;flex:1 1 auto;min-height:0;}
+.mccb-img .img-col{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;min-height:0;}
+.mccb-img .img-switch{flex:0 0 auto;}
+.mccb-img .img-stage{flex:1 1 auto;min-height:0;position:relative;background:#000;}
+.mccb-img .cam-grid{display:grid !important;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:4px;width:100%;height:100%;}
+.mccb-img .cam-tile{position:relative;width:100%;height:100%;min-height:0;overflow:hidden;background:#000;}
+.mccb-img .img-single{width:100%;height:100%;position:relative;}
+.mccb-img .cam-feed{display:block;width:100%;height:100%;object-fit:contain;background:#000;}
+.mccb-img .cam-settings{flex:0 0 auto;}
+`;
+
 function CameraTile({ wellIndex, cameraId, settings, onToast, onExpand, big, autoStart }) {
     const canvasRef = useRef(null);
     const [playing, setPlaying] = useState(false);
@@ -13,28 +28,19 @@ function CameraTile({ wellIndex, cameraId, settings, onToast, onExpand, big, aut
         if (!hasCam) return;
         const handleFrame = (e) => {
             const { well, width, height, pixels } = e.detail;
-            if (well !== wellIndex + 1) return; // wellIndex 0-based, well 1-based
+            if (well !== wellIndex + 1) return;
             const canvas = canvasRef.current;
             if (!canvas || !width || !height) return;
-
             canvas.width = width;
             canvas.height = height;
             const ctx = canvas.getContext('2d');
-
             const px = width * height;
-            // Be robust to the camera's pixel format instead of assuming Mono8.
-            // channels = how many source bytes per pixel (1=Mono8, 3=RGB8, etc.)
             const channels = Math.max(1, Math.round(pixels.length / px));
             const rgba = new Uint8ClampedArray(px * 4);
             for (let p = 0; p < px; p++) {
-                const s = p * channels;
-                const d = p * 4;
-                if (channels >= 3) {
-                    rgba[d] = pixels[s]; rgba[d + 1] = pixels[s + 1]; rgba[d + 2] = pixels[s + 2];
-                } else {
-                    const v = pixels[s];
-                    rgba[d] = v; rgba[d + 1] = v; rgba[d + 2] = v;
-                }
+                const s = p * channels, d = p * 4;
+                if (channels >= 3) { rgba[d] = pixels[s]; rgba[d + 1] = pixels[s + 1]; rgba[d + 2] = pixels[s + 2]; }
+                else { const v = pixels[s]; rgba[d] = v; rgba[d + 1] = v; rgba[d + 2] = v; }
                 rgba[d + 3] = 255;
             }
             ctx.putImageData(new ImageData(rgba, width, height), 0, 0);
@@ -53,13 +59,8 @@ function CameraTile({ wellIndex, cameraId, settings, onToast, onExpand, big, aut
         setPlaying(false);
     }
 
-    // Auto-start the live feed as soon as a camera is present so the tab shows
-    // an image without the operator having to hit play. Stops on unmount/tab away.
     useEffect(() => {
-        if (autoStart && hasCam) {
-            play();
-            return () => pause();
-        }
+        if (autoStart && hasCam) { play(); return () => pause(); }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [autoStart, hasCam, cameraId]);
 
@@ -74,10 +75,7 @@ function CameraTile({ wellIndex, cameraId, settings, onToast, onExpand, big, aut
 
     useEffect(() => {
         if (playing && hasCam) {
-            window.MCCB.sendToBackend({
-                cmd: 'camera_settings', well: wellIndex + 1,
-                exposure: settings.exposure, gain: settings.gain, fps: settings.fps
-            });
+            window.MCCB.sendToBackend({ cmd: 'camera_settings', well: wellIndex + 1, exposure: settings.exposure, gain: settings.gain, fps: settings.fps });
         }
     }, [settings, playing, hasCam, wellIndex]);
 
@@ -92,7 +90,7 @@ function CameraTile({ wellIndex, cameraId, settings, onToast, onExpand, big, aut
 
     return (
         <div className="cam-tile">
-            <canvas ref={canvasRef} className="cam-feed" style={{ width: '100%', height: '100%', objectFit: 'cover', background: '#000' }}></canvas>
+            <canvas ref={canvasRef} className="cam-feed"></canvas>
             <div className="cam-overlay-tl">
                 <div className="cam-tag">WELL {String(wellIndex + 1).padStart(2, '0')}</div>
                 <div className={'cam-status' + (playing ? ' live' : '')}>{playing ? '● LIVE' : '◼ STOPPED'}{count > 0 ? ` · ${count} SHOT${count === 1 ? '' : 'S'}` : ''}</div>
@@ -121,7 +119,7 @@ const EXP_OPTS = [['500 µs', 500], ['1 ms', 1000], ['2 ms', 2000], ['5 ms', 500
 const GAIN_OPTS = [['0 dB', 0], ['3 dB', 3], ['6 dB', 6], ['12 dB', 12], ['18 dB', 18], ['24 dB', 24]];
 const FPS_OPTS = [5, 10, 15, 20, 30];
 
-function SettingsPanel({ onApply, snapDir }) {
+function SettingsPanel({ onApply }) {
     const [exp, setExp] = useState(3);
     const [gain, setGain] = useState(0);
     const [fps, setFps] = useState(1);
@@ -146,8 +144,6 @@ function SettingsPanel({ onApply, snapDir }) {
 }
 
 function ImagingTab({ onToast }) {
-    // Seed from whatever the backend already cached at startup (it pushes the
-    // camera list once on connect, before this tab ever mounts).
     const [cams, setCams] = useState(() => {
         try { return (window.MCCB && window.MCCB.enumerateCameras && window.MCCB.enumerateCameras()) || []; }
         catch { return []; }
@@ -155,40 +151,38 @@ function ImagingTab({ onToast }) {
     const [settings, setSettings] = useState({ exposure: 5000, gain: 0, fps: 10 });
     const [full, setFull] = useState(null);
     const [viewMode, setViewMode] = useState('GRID');
-    const snapDir = '~/mccb_snapshots/';
 
     useEffect(() => {
-        // 1) Listen FIRST so we can't miss a push that arrives mid-mount.
-        const handleCams = (e) => { if (Array.isArray(e.detail)) setCams(e.detail); };
+        let iv = null, done = false;
+        const finish = (list) => { setCams(list); done = true; if (iv) { clearInterval(iv); iv = null; } };
+        const good = (l) => Array.isArray(l) && l.some(c => c && c.id);
+
+        const handleCams = (e) => { if (Array.isArray(e.detail)) { setCams(e.detail); if (good(e.detail)) finish(e.detail); } };
         window.addEventListener('mccb_cameras_ready', handleCams);
 
-        // 2) Ask the backend to (re)enumerate now. enumerateCameras() also returns
-        //    the cached list synchronously — use it if it's already populated.
         const ask = () => {
-            if (!(window.MCCB && window.MCCB.enumerateCameras)) return;
+            if (done || !(window.MCCB && window.MCCB.enumerateCameras)) return;
             const cached = window.MCCB.enumerateCameras();
-            if (Array.isArray(cached) && cached.some(c => c && c.id)) setCams(cached);
+            if (good(cached)) finish(cached);
         };
         ask();
-
-        // 3) If the socket wasn't connected yet at mount, keep retrying briefly so
-        //    a late connection still fills the grid with no manual refresh.
+        // Retry only until we get a camera, so we don't keep re-enumerating the
+        // bus (Aravis.update_device_list) while a feed is already streaming.
         let tries = 0;
-        const iv = setInterval(() => { ask(); if (++tries > 12) clearInterval(iv); }, 500);
+        iv = setInterval(() => { ask(); if (++tries > 12 && iv) { clearInterval(iv); iv = null; } }, 500);
 
-        return () => { window.removeEventListener('mccb_cameras_ready', handleCams); clearInterval(iv); };
+        return () => { window.removeEventListener('mccb_cameras_ready', handleCams); if (iv) clearInterval(iv); };
     }, []);
 
     const applyAll = (s) => setSettings(s);
-    // Always render a fixed set of 4 well slots; index into cams defensively so
-    // the grid is NEVER empty/blank even before the list arrives.
     const slots = [0, 1, 2, 3];
 
     return (
-        <div className="tab-page enter">
-            <div className="row grow" style={{ minHeight: 0 }}>
-                <div className="col grow" style={{ minHeight: 0 }}>
-                    <div className="row" style={{ padding: '12px 16px', gap: 8, borderBottom: '2px solid #000', background: '#f2f2f2' }}>
+        <div className="tab-page enter mccb-img">
+            <style>{LAYOUT_CSS}</style>
+            <div className="img-row">
+                <div className="img-col">
+                    <div className="row img-switch" style={{ padding: '12px 16px', gap: 8, borderBottom: '2px solid #000', background: '#f2f2f2' }}>
                         <button className="btn btn-sm" onClick={() => setViewMode('GRID')}
                             style={{ background: viewMode === 'GRID' ? '#000' : '#fff', color: viewMode === 'GRID' ? '#fff' : '#000', border: '2px solid #000' }}>
                             Combined View (Grid)
@@ -201,30 +195,30 @@ function ImagingTab({ onToast }) {
                         ))}
                     </div>
 
-                    <div className="grow" style={{ position: 'relative', minHeight: 0, background: '#000' }}>
+                    <div className="img-stage">
                         {viewMode === 'GRID' ? (
-                            <div className="cam-grid" style={{ height: '100%' }}>
+                            <div className="cam-grid">
                                 {slots.map(i => (
                                     <CameraTile key={i} wellIndex={i} cameraId={cams[i] && cams[i].id} settings={settings} onToast={onToast} onExpand={setFull} autoStart />
                                 ))}
                             </div>
                         ) : (
-                            <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <div className="img-single">
                                 <CameraTile key={'single-' + viewMode} wellIndex={viewMode} cameraId={cams[viewMode] && cams[viewMode].id} settings={settings} onToast={onToast} onExpand={setFull} big autoStart />
                             </div>
                         )}
                     </div>
                 </div>
-                <SettingsPanel onApply={applyAll} snapDir={snapDir} />
+                <SettingsPanel onApply={applyAll} />
             </div>
 
             {full != null && (
-                <div className="cam-full">
-                    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '2px solid #222' }}>
+                <div className="cam-full" style={{ display: 'flex', flexDirection: 'column' }}>
+                    <div className="row img-switch" style={{ justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '2px solid #222' }}>
                         <span style={{ color: '#fff', fontWeight: 800, letterSpacing: 2 }}>WELL {String(full + 1).padStart(2, '0')} · FULLSCREEN</span>
                         <button className="btn btn-sm" style={{ minWidth: 130 }} onClick={() => setFull(null)}>Close ✕</button>
                     </div>
-                    <div className="grow" style={{ position: 'relative', minHeight: 0 }}>
+                    <div className="img-stage" style={{ flex: '1 1 auto' }}>
                         <CameraTile key={'full' + full} wellIndex={full} cameraId={cams[full] && cams[full].id} settings={settings} onToast={onToast} onExpand={() => {}} big autoStart />
                     </div>
                 </div>
