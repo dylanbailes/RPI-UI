@@ -16,7 +16,7 @@ function CameraTile({ wellIndex, cameraId, settings, onToast, onExpand, big }) {
         const handleFrame = (e) => {
             const { well, width, height, pixels } = e.detail;
             if (well !== wellIndex + 1) return; // wellIndex is 0-based, well is 1-based
-            
+            console.log(`[CameraTile Well ${well}] 🎨 Rendering frame: ${width}x${height}`);
             const canvas = canvasRef.current;
             if (!canvas) return;
             

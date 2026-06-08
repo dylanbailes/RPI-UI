@@ -292,6 +292,7 @@ const well   = view.getUint8(0);
 const w      = view.getUint16(1);
 const h      = view.getUint16(3);
 const pixels = new Uint8ClampedArray(event.data, 5);
+console.log(`[MCCB Data] 📦 Binary frame received: Well ${well}, ${w}x${h}, ${pixels.length} bytes`);
 window.dispatchEvent(new CustomEvent('mccb_camera_frame', { detail: { well, width: w, height: h, pixels } }));
 return;
 }
@@ -325,6 +326,7 @@ engine._scheduleEmit();
 cachedPorts = msg.data;
 window.dispatchEvent(new CustomEvent('mccb_ports_ready', { detail: msg.data }));
 } else if (msg.type  === 'cameras') {
+console.log('[MCCB Data] 📷 Received camera list from backend:', msg.data);
 cachedCameras = msg.data;
 window.dispatchEvent(new CustomEvent('mccb_cameras_ready', { detail: msg.data }));
 } else if (msg.type === 'calibration') {

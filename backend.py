@@ -357,9 +357,12 @@ def serial_reader_loop(well_num, port, stop_event):
         send_log(well_num, f"Serial port {port} closed.", "info")
 
 def camera_reader_loop(well_num, camera_id, stop_event):
+    print(f"[Backend] 🎥 Camera reader loop STARTED for Well {well_num}, Camera ID: {camera_id}")
     try:
         Aravis.update_device_list()
         camera = Aravis.Camera.new(camera_id)
+        print(f"[Backend] ✅ Camera '{camera_id}' opened successfully for Well {well_num}")
+        
         camera.set_exposure_time(5000.0)
         camera.set_gain(0.0)
         try: camera.set_frame_rate(10.0)
@@ -370,6 +373,7 @@ def camera_reader_loop(well_num, camera_id, stop_event):
         for _ in range(4): stream.push_buffer(Aravis.Buffer.new_allocate(payload))
         camera.start_acquisition()
         
+        frame_count = 0
         while not stop_event.is_set():
             settings = camera_settings.get(well_num)
             if settings:
@@ -378,12 +382,14 @@ def camera_reader_loop(well_num, camera_id, stop_event):
                     camera.set_gain(float(settings["gain"]))
                     try: camera.set_frame_rate(float(settings["fps"]))
                     except: pass
-                except Exception as e: print(f"Cam {well_num} settings error: {e}")
+                except Exception as e: 
+                    print(f"[Backend] ⚠️ Cam {well_num} settings error: {e}")
                 camera_settings[well_num] = None
 
             buf = stream.try_pop_buffer()
             if buf is None:
-                import time; time.sleep(0.01); continue
+                import time; time.sleep(0.01)
+                continue
                 
             if buf.get_status() == Aravis.BufferStatus.SUCCESS:
                 w = buf.get_image_width()
@@ -391,10 +397,21 @@ def camera_reader_loop(well_num, camera_id, stop_event):
                 data = buf.get_data()
                 header = struct.pack('!BHH', well_num, w, h)
                 send_ws_binary_sync(header + bytes(data))
+                
+                frame_count += 1
+                # Log the first frame, then every 30 frames to avoid terminal spam
+                if frame_count == 1:
+                    print(f"[Backend] 📤 First binary frame sent for Well {well_num} ({w}x{h})")
+                elif frame_count % 30 == 0:
+                    print(f"[Backend] 📤 Sent {frame_count} frames for Well {well_num}")
+                    
             stream.push_buffer(buf)
+            
     except Exception as e:
+        print(f"[Backend] ❌ Camera error for Well {well_num}: {e}")
         send_ws_sync("error", {"well": well_num, "msg": f"Camera error: {e}"})
     finally:
+        print(f"[Backend] 🛑 Camera reader loop STOPPED for Well {well_num}")
         try: camera.stop_acquisition()
         except: pass
 
