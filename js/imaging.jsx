@@ -145,13 +145,18 @@ function ImagingTab({ onToast }) {
     const [cams, setCams] = useState([]);
     const [settings, setSettings] = useState({ exposure: 5000, gain: 0, fps: 10 });
     const [full, setFull] = useState(null);
+    const [viewMode, setViewMode] = useState('GRID'); // 'GRID' or well index (0-3)
     const snapDir = '~/mccb_snapshots/';
 
     useEffect(() => {
-        setCams(window.MCCB.enumerateCameras());
+        // Trigger initial enumeration if not already done
+        if (window.MCCB && window.MCCB.enumerateCameras) {
+            setCams(window.MCCB.enumerateCameras());
+        }
         const handleCams = (e) => setCams(e.detail);
         window.addEventListener('mccb_cameras_ready', handleCams);
         return () => window.removeEventListener('mccb_cameras_ready', handleCams);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const applyAll = (s) => setSettings(s);
@@ -159,13 +164,57 @@ function ImagingTab({ onToast }) {
     return (
         <div className="tab-page enter">
             <div className="row grow" style={{ minHeight: 0 }}>
-                <div className="cam-grid">
-                    {cams.map((cam, i) => (
-                        <CameraTile key={i} wellIndex={i} cameraId={cam.id} settings={settings} onToast={onToast} onExpand={setFull} />
-                    ))}
+                <div className="col grow" style={{ minHeight: 0 }}>
+                    {/* View Switcher Bar */}
+                    <div className="row" style={{ padding: '12px 16px', gap: 8, borderBottom: '2px solid #000', background: '#f2f2f2' }}>
+                        <button 
+                            className="btn btn-sm" 
+                            onClick={() => setViewMode('GRID')}
+                            style={{ background: viewMode === 'GRID' ? '#000' : '#fff', color: viewMode === 'GRID' ? '#fff' : '#000', border: '2px solid #000' }}
+                        >
+                            Combined View (Grid)
+                        </button>
+                        {[0, 1, 2, 3].map(i => (
+                            <button 
+                                key={i}
+                                className="btn btn-sm"
+                                onClick={() => setViewMode(i)}
+                                style={{ background: viewMode === i ? '#000' : '#fff', color: viewMode === i ? '#fff' : '#000', border: '2px solid #000' }}
+                            >
+                                Well {i + 1}
+                            </button>
+                            ))}
+                    </div>
+
+                    {/* Camera Display Area */}
+                    <div className="grow" style={{ position: 'relative', minHeight: 0, background: '#000' }}>
+                        {viewMode === 'GRID' ? (
+                            <div className="cam-grid" style={{ height: '100%' }}>
+                                {cams.map((cam, i) => (
+                                    <CameraTile key={i} wellIndex={i} cameraId={cam.id} settings={settings} onToast={onToast} onExpand={setFull} />
+                                ))}
+                            </div>
+                        ) : (
+                            <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <CameraTile 
+                                    key={'single-' + viewMode} 
+                                    wellIndex={viewMode} 
+                                    cameraId={cams[viewMode]?.id} 
+                                    settings={settings} 
+                                    onToast={onToast} 
+                                    onExpand={setFull} 
+                                    big 
+                                />
+                            </div>
+                        )}
+                    </div>
                 </div>
+                
+                {/* Settings Panel */}
                 <SettingsPanel onApply={applyAll} snapDir={snapDir} />
             </div>
+
+            {/* Fullscreen Modal */}
             {full != null && (
                 <div className="cam-full">
                     <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '2px solid #222' }}>
@@ -173,7 +222,7 @@ function ImagingTab({ onToast }) {
                         <button className="btn btn-sm" style={{ minWidth: 130 }} onClick={() => setFull(null)}>Close ✕</button>
                     </div>
                     <div className="grow" style={{ position: 'relative', minHeight: 0 }}>
-                        <CameraTile key={'full' + full} wellIndex={full} cameraId={cams[full].id} settings={settings} onToast={onToast} onExpand={() => {}} big />
+                        <CameraTile key={'full' + full} wellIndex={full} cameraId={cams[full]?.id} settings={settings} onToast={onToast} onExpand={() => {}} big />
                     </div>
                 </div>
             )}

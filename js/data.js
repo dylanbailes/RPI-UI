@@ -279,6 +279,7 @@ let cachedCameras = [];
 function connectToBackend() {
 const wsUrl = `ws://${window.location.hostname}:8000/ws/hardware`;
 ws = new WebSocket(wsUrl);
+ws.binaryType = 'arraybuffer'; 
 ws.onopen = () => {
 wsConnected = true;
 sendToBackend({ cmd: 'enumerate_ports' });
