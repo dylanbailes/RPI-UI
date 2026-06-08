@@ -320,17 +320,27 @@ def serial_reader_loop(well_num, port, stop_event):
                         send_ws_sync("cal_status", {"well": well_num, "status": "done"})
                         send_log(well_num, "CAL_END — calibration sequence complete", "ok")
                     else:
-                        # ---- Telemetry (JSON, or two bare floats) --------
+                        # ---- Telemetry (JSON, or comma-separated floats) --------
                         parsed = False
                         try:
                             obj = json.loads(line)
                             send_ws_sync("telemetry", {"well": well_num, "data": obj})
                             parsed = True
                         except json.JSONDecodeError:
-                            parts = line.split()
+                            # Split by comma to handle the new format: he1, he2, current
+                            parts = [p.strip() for p in line.split(',')]
                             if len(parts) >= 2:
                                 try:
-                                    obj = {"gauss1": float(parts[0]), "gauss2": float(parts[1])}
+                                    obj = {
+                                        "gauss1": float(parts[0]),
+                                        "gauss2": float(parts[1])
+                                    }
+                                    if len(parts) >= 3:
+                                        # Convert Amps to V/cm (E-field) using the constant 40.47
+                                        obj["efield"] = float(parts[2]) * 40.47
+                                        # Also store raw current for display/logging
+                                        obj["current"] = float(parts[2])
+                                    
                                     send_ws_sync("telemetry", {"well": well_num, "data": obj})
                                     parsed = True
                                 except ValueError:
