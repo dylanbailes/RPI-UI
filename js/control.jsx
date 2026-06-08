@@ -107,29 +107,37 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
       if (showE && vals[n].electric !== '') {
         const v = parseFloat(vals[n].electric);
         if (isNaN(v) || v < 0 || v > MAX_EFIELD) errors.push(`Well ${n} E-field out of range (0–${MAX_EFIELD}).`);
-        else { eng.setParams(n, { efield: v }); summary.push(`W${n} E ${v} V/cm`); }
+        else { 
+          eng.setParams(n, { efield: v }); 
+          summary.push(`W${n} E ${v} V/cm`); 
+        }
       }
       if (showM && vals[n].magnetic !== '') {
         const v = parseFloat(vals[n].magnetic);
         if (isNaN(v) || v < 0 || v > MAX_MAG) errors.push(`Well ${n} magnetic out of range (0–${MAX_MAG}).`);
         else if (!eng.wells[n].calibrated) errors.push(`Well ${n} requires magnetic calibration first.`);
         else {
-          // Parse frequency — fall back to current stored value if field left blank
+          // Parse frequency — fall back to 50.0 if field left blank
           const freqStr = vals[n].magFreq;
-          const freq = freqStr !== '' ? parseFloat(freqStr) : eng.wells[n].magFreqHz;
+          const freq = freqStr !== '' ? parseFloat(freqStr) : (eng.wells[n].magFreqHz || 50.0);
+          
           if (isNaN(freq) || freq < 0.1 || freq > 250) {
             errors.push(`Well ${n} frequency out of range (0.1–250 Hz).`);
           } else {
             const wt = vals[n].magWaveType;
             const waveNames = { 1: 'STEP', 2: 'SQR', 3: 'SINE', 4: 'TRI' };
-            eng.setParams(n, { gauss: v, magWaveType: wt, magFreqHz: freq });
+            
+            // --- FIX: Use 'mode' and 'freq' to match data.js setParams signature ---
+            eng.setParams(n, { gauss: v, mode: wt, freq: freq });
+            
             summary.push(`W${n} M ${v} G · ${waveNames[wt] || 'STEP'} ${wt !== 1 ? freq.toFixed(1) + ' Hz' : 'DC'}`);
           }
         }
       }
     });
+    
     if (errors.length) { onToast({ kind: 'error', text: errors[0] }); return; }
-    onToast({ kind: 'ok', text: `${summary.length} command${summary.length === 1 ? '' : 's'} transmitted · ${summary.join('  ')}` });
+    onToast({ kind: 'ok', text: `${summary.length} command${summary.length === 1 ? '' : 's'} transmitted · ${summary.join(' ')}` });
     onClose();
   }
 
