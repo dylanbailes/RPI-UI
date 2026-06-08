@@ -236,7 +236,7 @@ if ('efield' in obj) {
 
 if ('gauss1' in obj) {
   const g1 = obj.gauss1;
-  if (!isNaN(g1) && g1 >= 0) {   // guard: reject negative/NaN at ingest
+  if (!isNaN(g1) && isFinite(g1)) {   // guard: reject negative/NaN at ingest
     this.history.gauss1.push(g1);
     this._rms1.push(g1);
     this.measGauss1 = this.history.gauss1.last;
@@ -244,7 +244,7 @@ if ('gauss1' in obj) {
 }
 if ('gauss2' in obj) {
   const g2 = obj.gauss2;
-  if (!isNaN(g2) && g2 >= 0) {   // guard: reject negative/NaN at ingest
+  if (!isNaN(g2) && isFinite(g2)) {   // guard: reject negative/NaN at ingest
     this.history.gauss2.push(g2);
     this._rms2.push(g2);
     this.measGauss2 = this.history.gauss2.last;
