@@ -51,9 +51,13 @@ function useEngineTick(fps = 10) {
 // ---- Multi-series SVG chart (inline — avoids dependency on charts.jsx) ----
 // getSeries() → number[]  (single)  OR  number[][] (multi)
 // When multi: index 0 uses `color` (accent), index 1 uses SECONDARY_COLOR, etc.
+//
+// signed=true: Y axis spans -max … +max with zero line at centre.
+//              Needed for AC waveforms (sine/square) that go negative.
+// signed=false (default): Y axis spans 0 … max (original behaviour).
 const SERIES_COLORS = ['var(--accent, #FF3000)', '#2A6FDB', '#1F8A5B', '#7A5AE0'];
 
-function LiveChart({ getSeries, getSetpoint, getLatest, max, color, variant = 'area', grid = true, height = '100%' }) {
+function LiveChart({ getSeries, getSetpoint, getLatest, max, color, variant = 'area', grid = true, height = '100%', signed = false }) {
   const ref = React.useRef(null);
   const raf = React.useRef(null);
 
@@ -66,44 +70,84 @@ function LiveChart({ getSeries, getSetpoint, getLatest, max, color, variant = 'a
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, W, H);
 
-    const PAD = { top: 8, right: 8, bottom: 22, left: 40 };
+    const PAD = { top: 8, right: 8, bottom: 22, left: 44 };
     const cW = W - PAD.left - PAD.right;
     const cH = H - PAD.top - PAD.bottom;
+
+    // Y mapping: signed mode centres zero at midpoint.
+    // yOf(v) → canvas y-coordinate.  vOf(frac) → value at fractional height.
+    const yOf = signed
+      ? (v) => PAD.top + cH * (1 - (clampVal(v / max) * 0.5 + 0.5))
+      : (v) => PAD.top + cH - clampVal(v / max) * cH;
+
+    function clampVal(r) { return Math.max(-1, Math.min(1, r)); }
 
     // Gridlines
     if (grid) {
       ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = 1;
-      for (let i = 0; i <= 4; i++) {
-        const y = PAD.top + cH - (cH * i / 4);
+      const lines = signed ? 5 : 5; // number of horizontal grid lines
+      for (let i = 0; i <= lines; i++) {
+        const frac = i / lines;
+        const y = PAD.top + frac * cH;
         ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + cW, y); ctx.stroke();
+      }
+      // Zero line — bold and dark in signed mode so it's easy to read
+      if (signed) {
+        const y0 = yOf(0);
+        ctx.strokeStyle = '#bbb'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(PAD.left, y0); ctx.lineTo(PAD.left + cW, y0); ctx.stroke();
+        ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = 1;
       }
     }
 
     // Y-axis labels
     ctx.fillStyle = '#888'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
-    for (let i = 0; i <= 4; i++) {
-      const val = max * i / 4;
-      const y = PAD.top + cH - (cH * i / 4);
-      ctx.fillText(val.toFixed(1), PAD.left - 4, y + 3);
+    if (signed) {
+      // +max, +max/2, 0, -max/2, -max
+      const ticks = [max, max / 2, 0, -max / 2, -max];
+      ticks.forEach((val) => {
+        const y = yOf(val);
+        ctx.fillText(val === 0 ? '0' : val.toFixed(0), PAD.left - 4, y + 3);
+      });
+    } else {
+      for (let i = 0; i <= 4; i++) {
+        const val = max * i / 4;
+        const y = PAD.top + cH - (cH * i / 4);
+        ctx.fillText(val.toFixed(1), PAD.left - 4, y + 3);
+      }
     }
 
-    // Normalise getSeries() into always-an-array-of-arrays
+    // --- Snapshot both series atomically in one getSeries() call -----------
+    // This is the key fix for the dual-series race: a single call returns
+    // both rings' tails together, captured at the exact same moment.
+    // The caller is responsible for trimming both to the same length.
     const raw = getSeries ? getSeries() : [];
     const isMulti = Array.isArray(raw[0]);
-    const seriesArr = isMulti ? raw : [raw];
+    // If multi-series, enforce equal length by trimming to the shortest.
+    // This prevents HE1 and HE2 from diverging at stop time.
+    let seriesArr;
+    if (isMulti) {
+      const minLen = Math.min(...raw.map(s => s ? s.length : 0));
+      seriesArr = raw.map(s => (s && minLen > 0) ? s.slice(s.length - minLen) : []);
+    } else {
+      seriesArr = [raw];
+    }
 
     seriesArr.forEach((data, si) => {
       if (!data || data.length < 2) return;
       const serColor = color && si === 0 ? color : SERIES_COLORS[si] || SERIES_COLORS[si % SERIES_COLORS.length];
       const pts = data.map((v, i) => ({
         x: PAD.left + (i / (data.length - 1)) * cW,
-        y: PAD.top + cH - Math.max(0, Math.min(1, v / max)) * cH,
+        y: yOf(v),
       }));
 
+      // Area fill only for series 0 in unsigned mode — in signed mode a
+      // symmetric fill from zero looks cleaner but is optional. Skip it to
+      // keep the chart readable with crossing waveforms.
       ctx.beginPath();
       pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
 
-      if (variant === 'area' && si === 0) {
+      if (variant === 'area' && si === 0 && !signed) {
         const path = new Path2D();
         pts.forEach((p, i) => i === 0 ? path.moveTo(p.x, p.y) : path.lineTo(p.x, p.y));
         path.lineTo(pts[pts.length - 1].x, PAD.top + cH);
@@ -126,7 +170,7 @@ function LiveChart({ getSeries, getSetpoint, getLatest, max, color, variant = 'a
     if (getSetpoint) {
       const sp = getSetpoint();
       if (sp > 0) {
-        const spY = PAD.top + cH - Math.max(0, Math.min(1, sp / max)) * cH;
+        const spY = yOf(sp);
         ctx.save();
         ctx.setLineDash([4, 4]);
         ctx.strokeStyle = '#aaa'; ctx.lineWidth = 1;
@@ -140,7 +184,7 @@ function LiveChart({ getSeries, getSetpoint, getLatest, max, color, variant = 'a
     function loop() { draw(); raf.current = requestAnimationFrame(loop); }
     loop();
     return () => cancelAnimationFrame(raf.current);
-  }, [getSeries, getSetpoint, max, color, variant, grid]);
+  }, [getSeries, getSetpoint, max, color, variant, grid, signed]);
 
   return (
     <canvas ref={ref} style={{ width: '100%', height: height, display: 'block' }} />
@@ -342,6 +386,7 @@ function ChartCard({ title, well, accessor, accent, variant, grid, height }) {
             getLatest={() => accessor.latest()}
             max={accessor.max} color={accent} variant={variant} grid={grid}
             height={height || '100%'}
+            signed={!!accessor.signed}
           />
         </div>
       </div>
@@ -369,23 +414,35 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
   useEngineTick(10);
   const isE = metric === 'electric';
   const needsCalibration = !well.calibrated && metric === 'magnetic';
+  const chartN = (window.MCCB && window.MCCB.CHART_WINDOW) || 1000;
 
-  // FIX: Magnetic accessor returns a two-element array of series so both
-  // gauss1 and gauss2 are graphed simultaneously.
+  // FIX: Magnetic accessor captures both rings atomically and trims them to
+  // the same length so HE1 and HE2 are always time-aligned on the chart,
+  // even when the stimuli are stopped and samples trickle in unevenly.
   const acc = isE
     ? {
-        series: () => well.history.efield.values,
+        series: () => well.history.efield.tailN(chartN),
         setpoint: () => well.setEfield,
         latest: () => well.measEfield,
         max: window.MCCB.MAX_EFIELD,
         seriesLabels: null,
+        signed: false,
       }
     : {
-        series: () => [well.history.gauss1.values, well.history.gauss2.values],
+        series: () => {
+          const s1 = well.history.gauss1.tailN(chartN);
+          const s2 = well.history.gauss2.tailN(chartN);
+          const minLen = Math.min(s1.length, s2.length);
+          return [
+            minLen > 0 ? s1.slice(s1.length - minLen) : s1,
+            minLen > 0 ? s2.slice(s2.length - minLen) : s2,
+          ];
+        },
         setpoint: () => well.setGauss,
         latest: () => well.measGauss1,
         max: window.MCCB.MAX_MAG,
         seriesLabels: ['HE1 (Gauss)', 'HE2 (Gauss)'],
+        signed: true,
       };
 
   const status = isE ? well.electricStatus : well.magneticStatus;
@@ -510,20 +567,33 @@ function CollapsibleStack({ chart, well, filter }) {
 // ---- Combined overview ---------------------------------------------------
 function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
   useEngineTick(10);
+  const chartN = (window.MCCB && window.MCCB.CHART_WINDOW) || 1000;
   const eAcc = {
-    series: () => well.history.efield.values,
+    series: () => well.history.efield.tailN(chartN),
     setpoint: () => well.setEfield,
     latest: () => well.measEfield,
     max: window.MCCB.MAX_EFIELD,
     seriesLabels: null,
+    signed: false,
   };
-  // FIX: Combined magnetic chart now plots both sensors
+  // FIX: Atomic dual-series capture — both rings are read in a single call
+  // and trimmed to the same length here, so the chart never sees mismatched
+  // arrays that cause HE1/HE2 to diverge at stop time.
   const mAcc = {
-    series: () => [well.history.gauss1.values, well.history.gauss2.values],
+    series: () => {
+      const s1 = well.history.gauss1.tailN(chartN);
+      const s2 = well.history.gauss2.tailN(chartN);
+      const minLen = Math.min(s1.length, s2.length);
+      return [
+        minLen > 0 ? s1.slice(s1.length - minLen) : s1,
+        minLen > 0 ? s2.slice(s2.length - minLen) : s2,
+      ];
+    },
     setpoint: () => well.setGauss,
     latest: () => well.measGauss1,
     max: window.MCCB.MAX_MAG,
     seriesLabels: ['HE1', 'HE2'],
+    signed: true,
   };
   const side = layout === 'split';
 
