@@ -448,13 +448,25 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception as e:
             print(f"Initial port push error: {e}")
         try:
+            print("[Backend] 🔍 Scanning for USB cameras via Aravis...")
             Aravis.update_device_list()
-            cams = [{"id": Aravis.get_device_id(i), "present": True} for i in range(Aravis.get_n_devices())]
+            n_devices = Aravis.get_n_devices()
+            print(f"[Backend] 📷 Aravis found {n_devices} camera(s).")
+            
+            cams = []
+            for i in range(n_devices):
+                dev_id = Aravis.get_device_id(i)
+                print(f"[Backend]    -> Camera {i+1} ID: {dev_id}")
+                cams.append({"id": dev_id, "present": True})
+                
+            # Pad the list to 4 items so the UI always renders 4 tiles
             while len(cams) < 4:
                 cams.append({"id": None, "present": False})
+                
+            print(f"[Backend] 📤 Sending to frontend: {cams}")
             await websocket.send_json({"type": "cameras", "data": cams})
         except Exception as e:
-            print(f"Initial camera push error: {e}")
+            print(f"[Backend] ❌ Initial camera push error: {e}")
 
     await push_initial_state()
     
@@ -492,7 +504,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_json({"type": "ports", "data": port_list})
                     
                 elif cmd == "enumerate_cameras":
+                    print("[Backend] 🔍 Scanning for USB cameras via Aravis...")
                     Aravis.update_device_list()
+                    n_devices = Aravis.get_n_devices()
+                    print(f"[Backend] 📷 Aravis found {n_devices} camera(s).")
                     cams = [{"id": Aravis.get_device_id(i), "present": True} for i in range(Aravis.get_n_devices())]
                     while len(cams) < 4: cams.append({"id": None, "present": False})
                     await websocket.send_json({"type": "cameras", "data": cams})
