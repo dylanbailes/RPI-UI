@@ -1,6 +1,11 @@
 import React from 'react';
 import { useEffect, useState, useRef } from 'react';
 
+// Render at 1/DOWNSCALE resolution. The feed is shrunk to a small tile anyway,
+// so decoding the full 1440x1080 frame every tick just burns CPU on the Pi5.
+// 2 => quarter the pixels (~10x faster decode in practice). Set to 1 for native.
+const DOWNSCALE = 2;
+
 // Scoped layout override. We do NOT rely on .tab-page / .cam-grid / .cam-tile
 // establishing height — we force the full flex/grid height chain ourselves so
 // the camera stage always fills the available space on the kiosk.
@@ -31,19 +36,31 @@ function CameraTile({ wellIndex, cameraId, settings, onToast, onExpand, big, aut
             if (well !== wellIndex + 1) return;
             const canvas = canvasRef.current;
             if (!canvas || !width || !height) return;
-            canvas.width = width;
-            canvas.height = height;
             const ctx = canvas.getContext('2d');
             const px = width * height;
             const channels = Math.max(1, Math.round(pixels.length / px));
-            const rgba = new Uint8ClampedArray(px * 4);
-            for (let p = 0; p < px; p++) {
-                const s = p * channels, d = p * 4;
-                if (channels >= 3) { rgba[d] = pixels[s]; rgba[d + 1] = pixels[s + 1]; rgba[d + 2] = pixels[s + 2]; }
-                else { const v = pixels[s]; rgba[d] = v; rgba[d + 1] = v; rgba[d + 2] = v; }
-                rgba[d + 3] = 255;
+
+            // Nearest-neighbour downscale by DOWNSCALE: only build the pixels we
+            // actually display, instead of decoding all 1.5M then letting CSS
+            // shrink them. Output canvas is sized to the reduced resolution.
+            const step = DOWNSCALE;
+            const dw = Math.max(1, Math.floor(width / step));
+            const dh = Math.max(1, Math.floor(height / step));
+            canvas.width = dw;
+            canvas.height = dh;
+            const rgba = new Uint8ClampedArray(dw * dh * 4);
+            let d = 0;
+            for (let y = 0; y < dh; y++) {
+                const srcRow = (y * step) * width;
+                for (let x = 0; x < dw; x++) {
+                    const s = (srcRow + x * step) * channels;
+                    if (channels >= 3) { rgba[d] = pixels[s]; rgba[d + 1] = pixels[s + 1]; rgba[d + 2] = pixels[s + 2]; }
+                    else { const v = pixels[s]; rgba[d] = v; rgba[d + 1] = v; rgba[d + 2] = v; }
+                    rgba[d + 3] = 255;
+                    d += 4;
+                }
             }
-            ctx.putImageData(new ImageData(rgba, width, height), 0, 0);
+            ctx.putImageData(new ImageData(rgba, dw, dh), 0, 0);
         };
         window.addEventListener('mccb_camera_frame', handleFrame);
         return () => window.removeEventListener('mccb_camera_frame', handleFrame);
