@@ -455,8 +455,8 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
   // CombinedView (the bare {rmsVal.toFixed(2)} spans inside block()).
   const readouts = isE ? (
     <React.Fragment>
-      {renderReadout('Setpoint',  well.setEfield, 2,  'V/cm')}
-      {renderReadout('Measured',  well.measEfield, 2, 'V/cm', true)}
+      {renderReadout('Setpoint',  well.setEfield, 2,  'V')}
+      {renderReadout('Measured',  well.measEfield, 2, 'V', true)}
       {renderReadout('Voltage',   well.voltage,    3, 'V')}
       {renderReadout('Current',   well.current,    2, 'mA')}
     </React.Fragment>
@@ -666,7 +666,7 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
         <button className="btn btn-danger btn-sm" style={{ minWidth: 150 }} onClick={() => window.MCCB.engine.stopWell(well.num)}>Stop Well</button>
       </div>
       <div className={side ? 'row grow gap-14' : 'col grow gap-14'} style={{ minHeight: 0 }}>
-        {block('Electric', eAcc, well.electricStatus, well.setEfield, well.measEfield, 'V/cm', 'electric')}
+        {block('Electric', eAcc, well.electricStatus, well.setEfield, well.measEfield, 'V', 'electric')}
         {block('Magnetic', mAcc, well.magneticStatus, well.setGauss, well.history.gauss1.last, 'G', 'magnetic', well.rms1, true, well.history.gauss2.last, well.rms2)}
       </div>
     </div>

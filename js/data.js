@@ -21,7 +21,7 @@ from one ser.read()) no longer trigger 50 back-to-back React re-renders.
 (function () {
 'use strict';
 // ---- Safety limits ------------------------------------------------------
-const MAX_EFIELD = 1.5;    // V/cm
+const MAX_EFIELD = 5.0;    // V  (V_saline across the saline load; adjust to your expected range)
 const MAX_MAG    = 50.0;   // Gauss
 // At 2 kHz, 4 000 samples = 2 seconds exactly.
 const RMS_WINDOW = 4000;   // samples in the RMS sliding window
@@ -32,6 +32,20 @@ const HISTORY    = 10000;
 // The ring retains the full HISTORY so the window can be widened without loss.
 const CHART_WINDOW = 1000;
 const ELECTRODE_GAP_CM = 0.5;
+
+// ---- Electrode voltage conversion constants --------------------------------
+// The CS pin outputs a voltage proportional to electrode current.
+// Sense ratio:  2.49 V per amp  →  I = V_cs / CS_V_PER_AMP
+// Load circuit: 47 Ω sense resistor in parallel with 93 Ω saline load.
+//   R_parallel = (47 × 93) / (47 + 93) = 4371 / 140 ≈ 31.221 Ω
+// Voltage across saline:
+//   V_saline = I × R_parallel = (V_cs / 2.49) × 31.221 = V_cs × CS_TO_VSALINE
+// E-field (for future use):
+//   E = V_saline / ELECTRODE_GAP_CM
+const CS_V_PER_AMP    = 2.49;
+const R_SENSE_PARALLEL = (47 * 93) / (47 + 93);          // ≈ 31.221 Ω
+const CS_TO_VSALINE    = R_SENSE_PARALLEL / CS_V_PER_AMP; // ≈ 12.538  (V_cs → V_saline)
+
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function buildReverseLutFromArr(lutArr) {
 const reverse = [];
@@ -227,14 +241,24 @@ get rms2() { return this._rms2.value; }
 _ingest(obj) {
   if (!obj || typeof obj !== 'object') return; // reject strings/nulls
   
+  // 1. Handle Electric Field / Electrode Data
   if ('efield' in obj) {
-      this.history.efield.push(obj.efield);
-      this.measEfield = this.history.efield.last;
+    // Pre-converted V/cm value (e.g. from a future JSON-format firmware message)
+    this.history.efield.push(obj.efield);
+    this.measEfield = this.history.efield.last;
   } else if ('electrode_v' in obj) {
-      // Raw CS-pin voltage from the Arduino's third column.
-      // Stored as-is now; divide by ELECTRODE_GAP_CM once you switch to V/cm.
-      this.history.efield.push(obj.electrode_v);
+    // Raw CS-pin voltage from the Arduino's 3rd serial column.
+    // Convert to voltage across the saline load:
+    //   I = V_cs / 2.49 (V/A sense ratio)
+    //   V_saline = I × R_parallel  where R_parallel = 47‖93 ≈ 31.221 Ω
+    //   → V_saline = V_cs × CS_TO_VSALINE  (≈ ×12.538)
+    // Stored as V_saline for now; divide by ELECTRODE_GAP_CM here when
+    // you are ready to switch the graph axis to V/cm.
+    const v_saline = obj.electrode_v * CS_TO_VSALINE;
+    if (isFinite(v_saline) && v_saline >= 0) {
+      this.history.efield.push(v_saline);
       this.measEfield = this.history.efield.last;
+    }
   }
 
   // 2. Handle Magnetic Sensors
