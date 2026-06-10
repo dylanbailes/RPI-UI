@@ -331,6 +331,8 @@ def serial_reader_loop(well_num, port, stop_event):
                             if len(parts) >= 2:
                                 try:
                                     obj = {"gauss1": float(parts[0]), "gauss2": float(parts[1])}
+                                    if len(parts) >= 3:
+                                        obj["electrode_v"] = float(parts[2])
                                     send_ws_sync("telemetry", {"well": well_num, "data": obj})
                                     parsed = True
                                 except ValueError:

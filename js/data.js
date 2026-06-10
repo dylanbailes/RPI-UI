@@ -227,14 +227,14 @@ get rms2() { return this._rms2.value; }
 _ingest(obj) {
   if (!obj || typeof obj !== 'object') return; // reject strings/nulls
   
-  // 1. Handle Electric Field / Electrode Data
   if ('efield' in obj) {
-    this.history.efield.push(obj.efield);
-    this.measEfield = this.history.efield.last;
-  } else if ('voltage' in obj) {
-    // Derive E-field from voltage (handles combined packets containing both gauss and voltage)
-    this.history.efield.push(obj.voltage / ELECTRODE_GAP_CM);
-    this.measEfield = this.history.efield.last; // Added to fix instant digital readouts
+      this.history.efield.push(obj.efield);
+      this.measEfield = this.history.efield.last;
+  } else if ('electrode_v' in obj) {
+      // Raw CS-pin voltage from the Arduino's third column.
+      // Stored as-is now; divide by ELECTRODE_GAP_CM once you switch to V/cm.
+      this.history.efield.push(obj.electrode_v);
+      this.measEfield = this.history.efield.last;
   }
 
   // 2. Handle Magnetic Sensors
