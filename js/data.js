@@ -21,8 +21,8 @@ from one ser.read()) no longer trigger 50 back-to-back React re-renders.
 (function () {
 'use strict';
 // ---- Safety limits ------------------------------------------------------
-const MAX_EFIELD = 3.0;    // V/cm  (electric field limit across saline)
-const MAX_MAG    = 50.0;   // Gauss
+const MAX_EFIELD = 1.5;   // V/cm  — achievable ceiling after dead-band correction
+const MAX_MAG    = 50.0;  // Gauss
 // At 2 kHz, 4 000 samples = 2 seconds exactly.
 const RMS_WINDOW = 4000;   // samples in the RMS sliding window
 // History ring keeps enough samples to fill the chart. 10 000 @ 2 kHz = 5 s.
@@ -45,6 +45,25 @@ const ELECTRODE_GAP_CM = 1.6;  // cm — distance between electrodes
 const CS_V_PER_AMP    = 2.49;
 const R_SENSE_PARALLEL = (47 * 93) / (47 + 93);          // ≈ 31.221 Ω
 const CS_TO_VSALINE    = R_SENSE_PARALLEL / CS_V_PER_AMP; // ≈ 12.538  (V_cs → V_saline)
+
+// ---- H-bridge transfer function correction (quadratic) ------------------
+// 5-point calibration measured at commanded PWM vs actual V/cm output:
+//   set 1.0 -> 0.10,  set 1.5 -> 0.45,  set 2.0 -> 1.00,
+//   set 2.5 -> 1.60,  set 3.0 -> 2.35   (all V/cm, commanded on old 3.0 scale)
+// Least-squares quadratic fit (RMSE 0.015 vs 0.103 linear):
+//   meas = EFIELD_A * set^2 + EFIELD_B * set + EFIELD_C
+// Inverse (quadratic formula, positive root) used in setParams to find the
+// raw_set value that will actually deliver the user's requested V/cm:
+//   raw_set = (-EFIELD_B + sqrt(EFIELD_B^2 - 4*EFIELD_A*(EFIELD_C - target)))
+//             / (2 * EFIELD_A)
+// EFIELD_RAW_MAX is the commanded scale value that corresponds to 100% PWM
+// (set=3.0 in the calibration data above). It is NOT the same as MAX_EFIELD,
+// which is in measured output units.
+// Update A/B/C and RAW_MAX whenever you collect new calibration points.
+const EFIELD_A       =  0.242857;
+const EFIELD_B       =  0.158571;
+const EFIELD_C       = -0.310000;
+const EFIELD_RAW_MAX =  3.0;      // commanded scale value at 100% PWM
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function buildReverseLutFromArr(lutArr) {
@@ -438,11 +457,17 @@ setParams(wellNum, { efield, gauss, mode, freq }) {
   this.globalStopped = false;
   if (efield != null) {
     w.setEfield = clamp(efield, 0, MAX_EFIELD);
-    this._command({ 
-      cmd: 'set', 
-      well: wellNum, 
-      channel: 'e', 
-      pwm: w.setEfield * (100.0 / MAX_EFIELD),
+    // Quadratic inverse: find the raw_set that delivers w.setEfield V/cm.
+    // Forward model: meas = A*set^2 + B*set + C
+    // Inverse:       set  = (-B + sqrt(B^2 - 4A*(C - target))) / (2A)
+    const disc    = EFIELD_B*EFIELD_B - 4*EFIELD_A*(EFIELD_C - w.setEfield);
+    const raw_set = disc >= 0 ? (-EFIELD_B + Math.sqrt(disc)) / (2*EFIELD_A) : EFIELD_RAW_MAX;
+    const pwm     = clamp(raw_set * (100.0 / EFIELD_RAW_MAX), 0, 100);
+    this._command({
+      cmd: 'set',
+      well: wellNum,
+      channel: 'e',
+      pwm,
       mode: mode !== undefined ? mode : 1,
       freq: freq !== undefined ? freq : 10.0
     });
