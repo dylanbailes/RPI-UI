@@ -225,35 +225,40 @@ get rms2() { return this._rms2.value; }
 // measGauss1/2 are set from ring.last after push so they reflect the
 // newest sample even during a burst of 50+ rapid updates.
 _ingest(obj) {
-if (!obj || typeof obj !== 'object') return; // reject strings/nulls
-if ('efield' in obj) {
-  this.history.efield.push(obj.efield);
-  this.measEfield = this.history.efield.last;
-} else if ('voltage' in obj && !('gauss1' in obj)) {
-  // Voltage-only packet → derive E-field
-  this.history.efield.push(obj.voltage / ELECTRODE_GAP_CM);
-}
-
-if ('gauss1' in obj) {
-  const g1 = obj.gauss1;
-  if (!isNaN(g1) && isFinite(g1)) {   // guard: reject negative/NaN at ingest
-    this.history.gauss1.push(g1);
-    this._rms1.push(g1);
-    this.measGauss1 = this.history.gauss1.last;
+  if (!obj || typeof obj !== 'object') return; // reject strings/nulls
+  
+  // 1. Handle Electric Field / Electrode Data
+  if ('efield' in obj) {
+    this.history.efield.push(obj.efield);
+    this.measEfield = this.history.efield.last;
+  } else if ('voltage' in obj) {
+    // Derive E-field from voltage (handles combined packets containing both gauss and voltage)
+    this.history.efield.push(obj.voltage / ELECTRODE_GAP_CM);
+    this.measEfield = this.history.efield.last; // Added to fix instant digital readouts
   }
-}
-if ('gauss2' in obj) {
-  const g2 = obj.gauss2;
-  if (!isNaN(g2) && isFinite(g2)) {   // guard: reject negative/NaN at ingest
-    this.history.gauss2.push(g2);
-    this._rms2.push(g2);
-    this.measGauss2 = this.history.gauss2.last;
-  }
-}
 
-if ('voltage' in obj) { this.voltage = obj.voltage; this.history.voltage.push(obj.voltage); }
-if ('current' in obj) { this.current = obj.current; this.history.current.push(obj.current); }
-if ('coil'    in obj) { this.coilCurrent = obj.coil; }
+  // 2. Handle Magnetic Sensors
+  if ('gauss1' in obj) {
+    const g1 = obj.gauss1;
+    if (!isNaN(g1) && isFinite(g1)) {   // guard: reject negative/NaN at ingest
+      this.history.gauss1.push(g1);
+      this._rms1.push(g1);
+      this.measGauss1 = this.history.gauss1.last;
+    }
+  }
+  if ('gauss2' in obj) {
+    const g2 = obj.gauss2;
+    if (!isNaN(g2) && isFinite(g2)) {   // guard: reject negative/NaN at ingest
+      this.history.gauss2.push(g2);
+      this._rms2.push(g2);
+      this.measGauss2 = this.history.gauss2.last;
+    }
+  }
+
+  // 3. Handle System Diagnostics
+  if ('voltage' in obj) { this.voltage = obj.voltage; this.history.voltage.push(obj.voltage); }
+  if ('current' in obj) { this.current = obj.current; this.history.current.push(obj.current); }
+  if ('coil'    in obj) { this.coilCurrent = obj.coil; }
 }
 _pushLog(level, line) {
 const entry = level === 'raw' ? line : `» [${level.toUpperCase()}] ${line}`;
