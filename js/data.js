@@ -221,6 +221,18 @@ this.flashing    = false;
 this.gaussLut    = null;
 this.reverseGaussLut = null;
 
+// Waveform parameters — electric channel
+// Mirrors the magnetic magWaveType / magFreqHz pattern exactly.
+// elecWaveType: 1=STEP(DC), 2=SQUARE, 3=SINE, 4=TRIANGLE (matches Arduino WaveformType enum)
+// elecFreqHz:   waveform frequency; only meaningful when elecWaveType !== 1
+this.elecWaveType = 1;
+this.elecFreqHz   = 10.0;
+
+// Waveform parameters — magnetic channel (stored so the dialog can read
+// them back on next open, just like elecWaveType / elecFreqHz).
+this.magWaveType  = 1;
+this.magFreqHz    = 50.0;
+
 // Chart history rings (O(1) push, values() called only by rAF).
 this.history = {
   efield:  new Ring(HISTORY),
@@ -231,8 +243,11 @@ this.history = {
 };
 
 // Separate 2-second RMS trackers, independent of the chart rings.
+// _rms1 / _rms2 — Hall-effect (magnetic, signed AC waveforms).
+// _rmsE         — CS-pin electrode sense (always-positive rectified envelope).
 this._rms1 = new RmsTracker(RMS_WINDOW);
 this._rms2 = new RmsTracker(RMS_WINDOW);
+this._rmsE = new RmsTracker(RMS_WINDOW);
 
 this.log = [];
 }
@@ -251,6 +266,7 @@ get magneticStatus()  { return this.statusOf(Math.max(this.measGauss1, this.meas
 // how many samples the chart ring holds.
 get rms1() { return this._rms1.value; }
 get rms2() { return this._rms2.value; }
+get rmsE()  { return this._rmsE.value; }
 // ---- Ingest a telemetry object from the backend ---------------------
 // Only called from the 'telemetry' WebSocket message path.
 // NEVER called from the 'log' path — that causes double-counting and
@@ -264,6 +280,7 @@ _ingest(obj) {
   if ('efield' in obj) {
     // Pre-converted V/cm value (e.g. from a future JSON-format firmware message)
     this.history.efield.push(obj.efield);
+    this._rmsE.push(obj.efield);
     this.measEfield = this.history.efield.last;
   } else if ('electrode_v' in obj) {
     // Raw CS-pin voltage from the Arduino's 3rd serial column.
@@ -276,6 +293,7 @@ _ingest(obj) {
     const efield   = v_saline / ELECTRODE_GAP_CM;
     if (isFinite(efield) && efield >= 0) {
       this.history.efield.push(efield);
+      this._rmsE.push(efield);
       this.measEfield = this.history.efield.last;
     }
   }
@@ -312,9 +330,12 @@ reset() {
 this.setEfield = 0; this.setGauss = 0;
 this.measEfield = 0; this.measGauss1 = 0; this.measGauss2 = 0;
 this.voltage = 0; this.current = 0; this.coilCurrent = 0;
+this.elecWaveType = 1; this.elecFreqHz = 10.0;
+this.magWaveType  = 1; this.magFreqHz  = 50.0;
 Object.values(this.history).forEach(r => r.clear());
 this._rms1.clear();
 this._rms2.clear();
+this._rmsE.clear();
 }
 }
 // =========================================================================
@@ -450,8 +471,8 @@ sendToBackend({ cmd: 'disconnect_well', well: i });
 }
 }
 }
-// --- UPDATED: Now accepts and forwards 'mode' and 'freq' ---
-setParams(wellNum, { efield, gauss, mode, freq }) {
+// --- UPDATED: accepts mode/freq for both channels; writes state back to well ---
+setParams(wellNum, { efield, gauss, mode, freq, elecMode, elecFreq }) {
   const w = this.wells[wellNum];
   if (!w || !w.assigned) return;
   this.globalStopped = false;
@@ -463,13 +484,20 @@ setParams(wellNum, { efield, gauss, mode, freq }) {
     const disc    = EFIELD_B*EFIELD_B - 4*EFIELD_A*(EFIELD_C - w.setEfield);
     const raw_set = disc >= 0 ? (-EFIELD_B + Math.sqrt(disc)) / (2*EFIELD_A) : EFIELD_RAW_MAX;
     const pwm     = clamp(raw_set * (100.0 / EFIELD_RAW_MAX), 0, 100);
+    // Resolve waveform params — prefer elecMode/elecFreq, fall back to mode/freq,
+    // then to whatever is already stored on the well.
+    const resolvedMode = elecMode !== undefined ? elecMode : (mode !== undefined ? mode : w.elecWaveType);
+    const resolvedFreq = elecFreq !== undefined ? elecFreq : (freq  !== undefined ? freq  : w.elecFreqHz);
+    const clampedFreq  = clamp(resolvedFreq, 0.1, 100.0); // Arduino caps electric at 100 Hz
+    w.elecWaveType = resolvedMode;
+    w.elecFreqHz   = clampedFreq;
     this._command({
       cmd: 'set',
       well: wellNum,
       channel: 'e',
       pwm,
-      mode: mode !== undefined ? mode : 1,
-      freq: freq !== undefined ? freq : 10.0
+      mode: resolvedMode,
+      freq: clampedFreq,
     });
   }
   if (gauss != null) {
@@ -480,13 +508,18 @@ setParams(wellNum, { efield, gauss, mode, freq }) {
     }
     w.setGauss = clamp(gauss, 0, MAX_MAG);
     const pwm = physicalToPwm(w.setGauss, w.reverseGaussLut);
+    // Magnetic waveform params come from mode/freq (the existing convention).
+    const resolvedMode = mode !== undefined ? mode : w.magWaveType;
+    const resolvedFreq = freq  !== undefined ? freq  : w.magFreqHz;
+    w.magWaveType = resolvedMode;
+    w.magFreqHz   = resolvedFreq;
     this._command({ 
       cmd: 'set', 
       well: wellNum, 
       channel: 'h', 
       pwm,
-      mode: mode !== undefined ? mode : 1,
-      freq: freq !== undefined ? freq : 10.0
+      mode: resolvedMode,
+      freq: resolvedFreq,
     });
   }
 }

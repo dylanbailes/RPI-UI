@@ -453,12 +453,24 @@ function MetricView({ well, metric, layout, variant, grid, accent, onConfigure }
   // in THIS render pass (triggered by useEngineTick), so they are always
   // current. This matches the pattern used by the only working readout in
   // CombinedView (the bare {rmsVal.toFixed(2)} spans inside block()).
+  const WAVE_LABELS = { 1: 'DC', 2: 'Square', 3: 'Sine', 4: 'Triangle' };
   const readouts = isE ? (
     <React.Fragment>
       {renderReadout('Setpoint',  well.setEfield, 2,  'V/cm')}
       {renderReadout('Measured',  well.measEfield, 2, 'V/cm', true)}
-      {renderReadout('Voltage',   well.voltage,    3, 'V')}
-      {renderReadout('Current',   well.current,    2, 'mA')}
+      <div className="readout">
+        <div className="ro-label">RMS (2s)</div>
+        <div><span className="ro-value" style={{ fontVariantNumeric: 'tabular-nums' }}>{well.rmsE.toFixed(2)}</span><span className="ro-unit">V/cm</span></div>
+      </div>
+      <div className="readout">
+        <div className="ro-label">Waveform</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+          <span className="ro-value" style={{ fontSize: 14 }}>{WAVE_LABELS[well.elecWaveType] || 'DC'}</span>
+          {well.elecWaveType !== 1 && (
+            <span className="ro-unit">{well.elecFreqHz.toFixed(1)} Hz</span>
+          )}
+        </div>
+      </div>
     </React.Fragment>
   ) : (
     // Inline JSX — no function call indirection, no component boundary.
@@ -597,6 +609,8 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
   };
   const side = layout === 'split';
 
+  const WAVE_LABELS = { 1: 'DC', 2: 'SQR', 3: 'SINE', 4: 'TRI' };
+
   const block = (title, acc, status, setVal, measVal, unit, mode, rmsVal, isMag, measVal2, rmsVal2) => (
     <div className="col grow" style={{ minHeight: 0, gap: 10 }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
@@ -666,7 +680,7 @@ function CombinedView({ well, layout, variant, grid, accent, onConfigure }) {
         <button className="btn btn-danger btn-sm" style={{ minWidth: 150 }} onClick={() => window.MCCB.engine.stopWell(well.num)}>Stop Well</button>
       </div>
       <div className={side ? 'row grow gap-14' : 'col grow gap-14'} style={{ minHeight: 0 }}>
-        {block('Electric', eAcc, well.electricStatus, well.setEfield, well.measEfield, 'V/cm', 'electric')}
+        {block('Electric', eAcc, well.electricStatus, well.setEfield, well.measEfield, 'V/cm', 'electric', well.rmsE)}
         {block('Magnetic', mAcc, well.magneticStatus, well.setGauss, well.history.gauss1.last, 'G', 'magnetic', well.rms1, true, well.history.gauss2.last, well.rms2)}
       </div>
     </div>

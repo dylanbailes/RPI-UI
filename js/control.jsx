@@ -40,6 +40,8 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
       magnetic: w.setGauss ? String(w.setGauss) : '',
       magWaveType: w.magWaveType || 1,
       magFreq: w.magFreqHz ? String(w.magFreqHz) : '50',
+      elecWaveType: w.elecWaveType || 1,
+      elecFreq: w.elecFreqHz ? String(w.elecFreqHz) : '10',
     };
   });
   const [vals, setVals] = React.useState(init);
@@ -69,6 +71,9 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
   function setWaveType(n, wt) {
     setVals((s) => ({ ...s, [n]: { ...s[n], magWaveType: wt } }));
   }
+  function setElecWaveType(n, wt) {
+    setVals((s) => ({ ...s, [n]: { ...s[n], elecWaveType: wt } }));
+  }
 
   function onKey(k) {
     if (!armed) return;
@@ -83,7 +88,11 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
     const parts = armed.split('-');
     const n = parts[0];
     const m = parts.slice(1).join('-');
-    const mLabel = m === 'electric' ? 'Electric' : m === 'magnetic' ? 'Magnetic (G)' : 'Frequency (Hz)';
+    const mLabel = m === 'electric'  ? 'Electric'
+                 : m === 'magnetic'  ? 'Magnetic (G)'
+                 : m === 'magFreq'   ? 'Mag Frequency (Hz)'
+                 : m === 'elecFreq'  ? 'Elec Frequency (Hz)'
+                 : m;
     return `Well ${n} ${mLabel}`;
   }
   const armedLabel = armedLabelText();
@@ -94,9 +103,10 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
     if (isNaN(v)) return true;
     const parts = key.split('-');
     const m = parts.slice(1).join('-');
-    if (m === 'electric') return v < 0 || v > MAX_EFIELD;
-    if (m === 'magnetic') return v < 0 || v > MAX_MAG;
-    if (m === 'magFreq')  return v < 0.1 || v > 250;
+    if (m === 'electric')  return v < 0 || v > MAX_EFIELD;
+    if (m === 'magnetic')  return v < 0 || v > MAX_MAG;
+    if (m === 'magFreq')   return v < 0.1 || v > 250;
+    if (m === 'elecFreq')  return v < 0.1 || v > 100;
     return false;
   }
 
@@ -107,9 +117,18 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
       if (showE && vals[n].electric !== '') {
         const v = parseFloat(vals[n].electric);
         if (isNaN(v) || v < 0 || v > MAX_EFIELD) errors.push(`Well ${n} E-field out of range (0–${MAX_EFIELD}).`);
-        else { 
-          eng.setParams(n, { efield: v }); 
-          summary.push(`W${n} E ${v} V/cm`); 
+        else {
+          // Parse electric frequency — fall back to 10.0 if field left blank
+          const eWt = vals[n].elecWaveType;
+          const eFreqStr = vals[n].elecFreq;
+          const eFreq = eFreqStr !== '' ? parseFloat(eFreqStr) : (eng.wells[n].elecFreqHz || 10.0);
+          if (isNaN(eFreq) || eFreq < 0.1 || eFreq > 100) {
+            errors.push(`Well ${n} electric frequency out of range (0.1–100 Hz).`);
+          } else {
+            const waveNames = { 1: 'DC', 2: 'SQR', 3: 'SINE', 4: 'TRI' };
+            eng.setParams(n, { efield: v, elecMode: eWt, elecFreq: eFreq });
+            summary.push(`W${n} E ${v} V/cm · ${waveNames[eWt] || 'DC'}${eWt !== 1 ? ' ' + eFreq.toFixed(1) + ' Hz' : ''}`);
+          }
         }
       }
       if (showM && vals[n].magnetic !== '') {
@@ -125,12 +144,9 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
             errors.push(`Well ${n} frequency out of range (0.1–250 Hz).`);
           } else {
             const wt = vals[n].magWaveType;
-            const waveNames = { 1: 'STEP', 2: 'SQR', 3: 'SINE', 4: 'TRI' };
-            
-            // --- FIX: Use 'mode' and 'freq' to match data.js setParams signature ---
+            const waveNames = { 1: 'DC', 2: 'SQR', 3: 'SINE', 4: 'TRI' };
             eng.setParams(n, { gauss: v, mode: wt, freq: freq });
-            
-            summary.push(`W${n} M ${v} G · ${waveNames[wt] || 'STEP'} ${wt !== 1 ? freq.toFixed(1) + ' Hz' : 'DC'}`);
+            summary.push(`W${n} M ${v} G · ${waveNames[wt] || 'DC'}${wt !== 1 ? ' ' + freq.toFixed(1) + ' Hz' : ''}`);
           }
         }
       }
@@ -161,9 +177,29 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
                   <div className="gb-title">Well {n}</div>
                   <div className="gb-body col" style={{ gap: 14 }}>
                     {showE && (
-                      <FieldRow label="Electric (V/cm)" placeholder={`0 – ${MAX_EFIELD}`}
-                        k={`${n}-electric`} value={vals[n].electric} armed={armed} bad={rangeBad(`${n}-electric`)}
-                        onArm={setArmed} />
+                      <React.Fragment>
+                        <FieldRow label="Electric (V/cm)" placeholder={`0 – ${MAX_EFIELD}`}
+                          k={`${n}-electric`} value={vals[n].electric} armed={armed} bad={rangeBad(`${n}-electric`)}
+                          onArm={setArmed} />
+
+                        {/* Wave type selector for electric channel */}
+                        <div className="col" style={{ gap: 6 }}>
+                          <span style={{ fontWeight: 700, fontSize: 12, letterSpacing: 1, textTransform: 'uppercase' }}>Waveform</span>
+                          <WaveTypeSelector
+                            value={vals[n].elecWaveType}
+                            disabled={false}
+                            onChange={(wt) => setElecWaveType(n, wt)} />
+                        </div>
+
+                        {/* Frequency field — hidden for DC (STEP) */}
+                        {vals[n].elecWaveType !== 1 && (
+                          <FieldRow label="Frequency (Hz) · 0.1 – 100"
+                            placeholder="0.1 – 100"
+                            k={`${n}-elecFreq`} value={vals[n].elecFreq} armed={armed}
+                            bad={rangeBad(`${n}-elecFreq`)}
+                            onArm={setArmed} />
+                        )}
+                      </React.Fragment>
                     )}
                     {showM && (
                       <React.Fragment>
@@ -196,7 +232,7 @@ function ModeDialog({ mode, initialWell, initialMetric, onClose, onToast }) {
               ))}
             </div>
             <p style={{ color: 'var(--dim)', fontSize: 12, marginTop: 16, lineHeight: 1.5 }}>
-              Limits enforced before transmit · Electric ≤ {MAX_EFIELD} V/cm · Magnetic ≤ {MAX_MAG} G · Frequency 0.1–250 Hz. Leave a field blank to hold its current value.
+              Limits enforced before transmit · Electric ≤ {MAX_EFIELD} V/cm · Magnetic ≤ {MAX_MAG} G · Electric freq 0.1–100 Hz · Magnetic freq 0.1–250 Hz. Leave a field blank to hold its current value.
             </p>
           </div>
 
