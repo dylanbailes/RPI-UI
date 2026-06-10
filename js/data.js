@@ -321,6 +321,31 @@ _ingest(obj) {
   if ('current' in obj) { this.current = obj.current; this.history.current.push(obj.current); }
   if ('coil'    in obj) { this.coilCurrent = obj.coil; }
 }
+// ---- Ingest a BINARY telemetry batch from the backend -------------------
+// floats is a Float32Array laid out [g1, g2, ev, g1, g2, ev, ...] with
+// `count` triplets. ev is NaN when the firmware line had no 3rd column.
+// PERF: this is the hot path at 2 kHz × 4 wells. One call ingests an entire
+// ~30 ms batch with zero JSON parsing, zero object allocation per sample,
+// and the meas* "Inst." readouts are written ONCE after the loop (so they
+// always reflect the newest sample, never a mid-burst one).
+_ingestBatch(floats, count) {
+  const h1 = this.history.gauss1, h2 = this.history.gauss2, he = this.history.efield;
+  const r1 = this._rms1, r2 = this._rms2, rE = this._rmsE;
+  let sawE = false;
+  for (let i = 0, j = 0; i < count; i++, j += 3) {
+    const g1 = floats[j], g2 = floats[j + 1], ev = floats[j + 2];
+    if (g1 === g1 && isFinite(g1)) { h1.push(g1); r1.push(g1); }   // x===x → not NaN
+    if (g2 === g2 && isFinite(g2)) { h2.push(g2); r2.push(g2); }
+    if (ev === ev && isFinite(ev) && ev >= 0) {
+      const efield = (ev * CS_TO_VSALINE) / ELECTRODE_GAP_CM;
+      he.push(efield); rE.push(efield);
+      sawE = true;
+    }
+  }
+  this.measGauss1 = h1.last;
+  this.measGauss2 = h2.last;
+  if (sawE) this.measEfield = he.last;
+}
 _pushLog(level, line) {
 const entry = level === 'raw' ? line : `» [${level.toUpperCase()}] ${line}`;
 this.log.push(entry);
@@ -356,14 +381,34 @@ sendToBackend({ cmd: 'enumerate_cameras' });
 };
 ws.onmessage = (event) => {
 if (event.data instanceof ArrayBuffer) {
-const view   = new DataView(event.data);
-const well   = view.getUint8(0);
-const w      = view.getUint16(1);
-const h      = view.getUint16(3);
-const pixels = new Uint8ClampedArray(event.data, 5);
-console.log(`[MCCB Data] 📦 Binary frame received: Well ${well}, ${w}x${h}, ${pixels.length} bytes`);
+// Typed binary frames (little-endian). Byte 0 = frame type:
+//   1 = camera   [1][well u8][w u16][h u16][pixels…]
+//   2 = telemetry batch [2][well u8][count u16][count × 3 × f32]
+const dv = new DataView(event.data);
+const ftype = dv.getUint8(0);
+if (ftype === 2) {
+const wellNum = dv.getUint8(1);
+const count   = dv.getUint16(2, true);
+const w = engine.wells[wellNum];
+if (w && count > 0) {
+// Header is 4 bytes → float32 view is correctly aligned at offset 4.
+w._ingestBatch(new Float32Array(event.data, 4, count * 3), count);
+engine.dataRev++;            // charts redraw only when this changes
+engine._scheduleEmit();      // throttled — one rAF per burst
+}
+return;
+}
+if (ftype === 1) {
+const well   = dv.getUint8(1);
+const w      = dv.getUint16(2, true);
+const h      = dv.getUint16(4, true);
+const pixels = new Uint8ClampedArray(event.data, 6);
+// NOTE: no console.log here — logging every camera frame measurably
+// stalls the main thread at 40 fps aggregate.
 window.dispatchEvent(new CustomEvent('mccb_camera_frame', { detail: { well, width: w, height: h, pixels } }));
 return;
+}
+return; // unknown binary frame — ignore
 }
 try { handleBackendMessage(JSON.parse(event.data)); } catch (e) {}
 };
@@ -377,6 +422,7 @@ if (msg.type === 'telemetry') {
 const wellNum = msg.data.well;
 if (engine.wells[wellNum]) {
 engine.wells[wellNum]._ingest(msg.data.data);
+engine.dataRev++;
 engine._scheduleEmit();   // throttled — one rAF per burst
 }
 } else if (msg.type === 'log') {
@@ -442,6 +488,11 @@ this._subs          = new Set();
 this.running        = false;
 this.globalStopped  = false;
 this._emitPending   = false;   // rAF throttle flag
+// Monotonic counter bumped whenever new telemetry lands in any ring.
+// Charts compare it between animation frames and skip the (expensive)
+// canvas redraw when nothing changed — a large win with 4 wells of
+// charts that previously redrew at 60 fps unconditionally.
+this.dataRev        = 0;
 }
 subscribe(cb) { this._subs.add(cb); return () => this._subs.delete(cb); }
 // Immediate emit — used for non-telemetry events (calibration, flash, etc.)

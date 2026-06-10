@@ -104,10 +104,28 @@ function LiveChart({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
     resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(wrapRef.current);
 
     const padL = 6, padR = 6, padT = 10, padB = 6;
+
+    // PERF: redraw gating. Previously every LiveChart redrew the full canvas
+    // at 60 fps regardless of whether data changed — with several charts on
+    // screen that alone saturated the Pi 5's GPU/CPU budget. Now we redraw
+    // only when (a) new telemetry landed (engine.dataRev changed), capped at
+    // ~30 fps, or (b) ~5 fps idle ticks to keep the leading-dot pulse alive,
+    // or (c) the canvas was resized.
+    let lastRev = -1, lastDraw = 0, sizeDirty = true;
+    const ro2 = new ResizeObserver(() => { resize(); sizeDirty = true; });
+    ro2.observe(wrapRef.current);
+
+    function frame(now) {
+      rafRef.current = requestAnimationFrame(frame);
+      const rev = (window.MCCB && window.MCCB.engine) ? window.MCCB.engine.dataRev : 0;
+      const dataChanged = rev !== lastRev;
+      const since = now - lastDraw;
+      if (!sizeDirty && !(dataChanged && since >= 33) && since < 200) return;
+      lastRev = rev; lastDraw = now; sizeDirty = false;
+      draw();
+    }
 
     function draw() {
       const seriesData = getSeries() || [];
@@ -211,11 +229,9 @@ function LiveChart({
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('AWAITING TELEMETRY', W / 2, H / 2);
       }
-
-      rafRef.current = requestAnimationFrame(draw);
     }
-    rafRef.current = requestAnimationFrame(draw);
-    return () => { cancelAnimationFrame(rafRef.current); ro.disconnect(); };
+    rafRef.current = requestAnimationFrame(frame);
+    return () => { cancelAnimationFrame(rafRef.current); ro2.disconnect(); };
   }, [variant, grid, color, max, colors]);
 
   return (

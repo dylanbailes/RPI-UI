@@ -1,10 +1,11 @@
 import React from 'react';
 import { useEffect, useState, useRef } from 'react';
 
-// Render at 1/DOWNSCALE resolution. The feed is shrunk to a small tile anyway,
-// so decoding the full 1440x1080 frame every tick just burns CPU on the Pi5.
-// 2 => quarter the pixels (~10x faster decode in practice). Set to 1 for native.
-const DOWNSCALE = 2;
+// Client-side downscale factor. The backend now downscales frames BEFORE
+// sending (MCCB_CAM_DOWNSCALE, default 2), which saves websocket bandwidth
+// AND decode time, so this stays at 1. Raise it only if you disable
+// server-side downscaling.
+const DOWNSCALE = 1;
 
 // Scoped layout override. We do NOT rely on .tab-page / .cam-grid / .cam-tile
 // establishing height — we force the full flex/grid height chain ourselves so
@@ -31,39 +32,76 @@ function CameraTile({ wellIndex, cameraId, settings, onToast, onExpand, big, aut
 
     useEffect(() => {
         if (!hasCam) return;
-        const handleFrame = (e) => {
-            const { well, width, height, pixels } = e.detail;
-            if (well !== wellIndex + 1) return;
+        // PERF: frames are coalesced through requestAnimationFrame — the
+        // event handler only stashes the newest frame, and the draw happens
+        // at most once per display refresh. If frames arrive faster than the
+        // tile can paint, intermediate frames are silently dropped (the
+        // backend also drops, so neither side ever backlogs).
+        // The ImageData + Uint32 scratch buffers are reused across frames to
+        // avoid allocating ~1.5 MB per frame on the Pi.
+        let latest = null;
+        let rafId = 0;
+        let imgData = null;     // reused ImageData
+        let img32 = null;       // Uint32 view of imgData.data
+
+        const drawLatest = () => {
+            rafId = 0;
+            const f = latest;
+            latest = null;
+            if (!f) return;
+            const { width, height, pixels } = f;
             const canvas = canvasRef.current;
             if (!canvas || !width || !height) return;
             const ctx = canvas.getContext('2d');
             const px = width * height;
             const channels = Math.max(1, Math.round(pixels.length / px));
 
-            // Nearest-neighbour downscale by DOWNSCALE: only build the pixels we
-            // actually display, instead of decoding all 1.5M then letting CSS
-            // shrink them. Output canvas is sized to the reduced resolution.
             const step = DOWNSCALE;
-            const dw = Math.max(1, Math.floor(width / step));
-            const dh = Math.max(1, Math.floor(height / step));
-            canvas.width = dw;
-            canvas.height = dh;
-            const rgba = new Uint8ClampedArray(dw * dh * 4);
-            let d = 0;
-            for (let y = 0; y < dh; y++) {
-                const srcRow = (y * step) * width;
-                for (let x = 0; x < dw; x++) {
-                    const s = (srcRow + x * step) * channels;
-                    if (channels >= 3) { rgba[d] = pixels[s]; rgba[d + 1] = pixels[s + 1]; rgba[d + 2] = pixels[s + 2]; }
-                    else { const v = pixels[s]; rgba[d] = v; rgba[d + 1] = v; rgba[d + 2] = v; }
-                    rgba[d + 3] = 255;
-                    d += 4;
+            const dw = step > 1 ? Math.max(1, Math.floor(width / step)) : width;
+            const dh = step > 1 ? Math.max(1, Math.floor(height / step)) : height;
+            if (canvas.width !== dw || canvas.height !== dh || !imgData) {
+                canvas.width = dw;
+                canvas.height = dh;
+                imgData = ctx.createImageData(dw, dh);
+                img32 = new Uint32Array(imgData.data.buffer);
+            }
+
+            if (channels === 1 && step === 1) {
+                // FAST PATH (the normal case): grayscale, no client downscale.
+                // One Uint32 write per pixel (0xFF000000 | v<<16 | v<<8 | v)
+                // is ~4× faster than four byte writes.
+                for (let i = 0; i < px; i++) {
+                    const v = pixels[i];
+                    img32[i] = 0xFF000000 | (v << 16) | (v << 8) | v;
+                }
+            } else {
+                // General path: optional downscale and/or RGB input.
+                const rgba = imgData.data;
+                let d = 0;
+                for (let y = 0; y < dh; y++) {
+                    const srcRow = (y * step) * width;
+                    for (let x = 0; x < dw; x++) {
+                        const s = (srcRow + x * step) * channels;
+                        if (channels >= 3) { rgba[d] = pixels[s]; rgba[d + 1] = pixels[s + 1]; rgba[d + 2] = pixels[s + 2]; }
+                        else { const v = pixels[s]; rgba[d] = v; rgba[d + 1] = v; rgba[d + 2] = v; }
+                        rgba[d + 3] = 255;
+                        d += 4;
+                    }
                 }
             }
-            ctx.putImageData(new ImageData(rgba, dw, dh), 0, 0);
+            ctx.putImageData(imgData, 0, 0);
+        };
+
+        const handleFrame = (e) => {
+            if (e.detail.well !== wellIndex + 1) return;
+            latest = e.detail;
+            if (!rafId) rafId = requestAnimationFrame(drawLatest);
         };
         window.addEventListener('mccb_camera_frame', handleFrame);
-        return () => window.removeEventListener('mccb_camera_frame', handleFrame);
+        return () => {
+            window.removeEventListener('mccb_camera_frame', handleFrame);
+            if (rafId) cancelAnimationFrame(rafId);
+        };
     }, [hasCam, wellIndex]);
 
     function play() {

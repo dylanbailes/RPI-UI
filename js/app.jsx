@@ -41,13 +41,22 @@ function useTweaks(defaults) {
   return [state, setTweak];
 }
 
-function useEngineTick() {
+function useEngineTick(hz = 6) {
+  // PERF: this re-renders the ENTIRE app tree, so it must be throttled.
+  // The old fallback forced an update on every engine emit; with telemetry
+  // batching the engine emits up to ~30×/s, and at the old 2 kHz-per-message
+  // rate it was far worse. Cap App re-renders at `hz`.
   const [, forceUpdate] = React.useReducer(x => x + 1, 0);
   React.useEffect(() => {
     if (!window.MCCB || !window.MCCB.engine) return;
-    const unsub = window.MCCB.engine.subscribe(() => forceUpdate());
+    let last = 0;
+    const minDt = 1000 / hz;
+    const unsub = window.MCCB.engine.subscribe(() => {
+      const now = performance.now();
+      if (now - last >= minDt) { last = now; forceUpdate(); }
+    });
     return () => unsub && unsub();
-  }, []);
+  }, [hz]);
 }
 
 // 3. FALLBACK TWEAKS UI (If you don't have a tweaks.jsx file)

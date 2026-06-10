@@ -61,6 +61,15 @@ function LiveChart({ getSeries, getSetpoint, getLatest, max, color, variant = 'a
   const ref = React.useRef(null);
   const raf = React.useRef(null);
 
+  // PERF: getSeries/getSetpoint are fresh closures on every parent render.
+  // Keeping them in refs (instead of effect deps) means the rAF loop below
+  // is started ONCE and never torn down/restarted at the parent's 10 Hz
+  // engine tick — previously each tick cancelled + recreated the loop.
+  const getSeriesRef = React.useRef(getSeries);
+  const getSetpointRef = React.useRef(getSetpoint);
+  getSeriesRef.current = getSeries;
+  getSetpointRef.current = getSetpoint;
+
   function draw() {
     const canvas = ref.current;
     if (!canvas) return;
@@ -121,7 +130,7 @@ function LiveChart({ getSeries, getSetpoint, getLatest, max, color, variant = 'a
     // This is the key fix for the dual-series race: a single call returns
     // both rings' tails together, captured at the exact same moment.
     // The caller is responsible for trimming both to the same length.
-    const raw = getSeries ? getSeries() : [];
+    const raw = getSeriesRef.current ? getSeriesRef.current() : [];
     const isMulti = Array.isArray(raw[0]);
     // If multi-series, enforce equal length by trimming to the shortest.
     // This prevents HE1 and HE2 from diverging at stop time.
@@ -167,8 +176,8 @@ function LiveChart({ getSeries, getSetpoint, getLatest, max, color, variant = 'a
     });
 
     // Setpoint line
-    if (getSetpoint) {
-      const sp = getSetpoint();
+    if (getSetpointRef.current) {
+      const sp = getSetpointRef.current();
       if (sp > 0) {
         const spY = yOf(sp);
         ctx.save();
@@ -181,10 +190,29 @@ function LiveChart({ getSeries, getSetpoint, getLatest, max, color, variant = 'a
   }
 
   React.useEffect(() => {
-    function loop() { draw(); raf.current = requestAnimationFrame(loop); }
-    loop();
+    // PERF: redraw only when new telemetry has arrived (engine.dataRev
+    // changed), capped at ~30 fps, with a low-rate fallback so resizes and
+    // style changes still repaint. The old loop redrew unconditionally at
+    // 60 fps per chart — the main cause of UI stutter with 4 wells live.
+    let lastRev = -1, lastDraw = 0, lastW = 0, lastH = 0;
+    function loop(now) {
+      raf.current = requestAnimationFrame(loop);
+      const canvas = ref.current;
+      const W = canvas ? canvas.offsetWidth : 0;
+      const H = canvas ? canvas.offsetHeight : 0;
+      const rev = (window.MCCB && window.MCCB.engine) ? window.MCCB.engine.dataRev : 0;
+      const sizeChanged = W !== lastW || H !== lastH;
+      const dataChanged = rev !== lastRev;
+      const since = now - lastDraw;
+      if (!sizeChanged && !(dataChanged && since >= 33) && since < 250) return;
+      lastRev = rev; lastDraw = now; lastW = W; lastH = H;
+      draw();
+    }
+    raf.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf.current);
-  }, [getSeries, getSetpoint, max, color, variant, grid, signed]);
+    // Stable deps only — accessor closures are read via refs above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [max, color, variant, grid, signed]);
 
   return (
     <canvas ref={ref} style={{ width: '100%', height: height, display: 'block' }} />

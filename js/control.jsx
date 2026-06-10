@@ -450,6 +450,11 @@ function ControlTab({ accent, onMode, onConfigure }) {
 }
 
 function WellSummaryCard({ well, accent, onConfigure }) {
+  // PERF: `.values` returns the FULL 10,000-sample history ring — allocated
+  // fresh on every render and stroked as 10k line segments per sparkline.
+  // The spark is ~240 px wide, so the chart window (1,000 samples) is
+  // already more than one sample per pixel.
+  const sparkN = (window.MCCB && window.MCCB.CHART_WINDOW) || 1000;
   return (
     <div style={{ border: '2px solid #000', display: 'flex', flexDirection: 'column' }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', background: '#000', color: '#fff', padding: '8px 12px' }}>
@@ -458,10 +463,10 @@ function WellSummaryCard({ well, accent, onConfigure }) {
       </div>
       <div className="row" style={{ padding: 12, gap: 12 }}>
         <SummaryMetric label="Electric" set={well.setEfield} meas={well.measEfield} unit="V/cm"
-          status={well.electricStatus} accent={accent} values={well.history.efield.values} max={window.MCCB.MAX_EFIELD} />
+          status={well.electricStatus} accent={accent} values={well.history.efield.tailN(sparkN)} max={window.MCCB.MAX_EFIELD} />
         <div style={{ width: 2, background: '#eee', alignSelf: 'stretch' }}></div>
         <SummaryMetric label="Magnetic" set={well.setGauss} meas={well.measGauss1} unit="G"
-          status={well.magneticStatus} accent={accent} values={well.history.gauss1.values} max={window.MCCB.MAX_MAG} />
+          status={well.magneticStatus} accent={accent} values={well.history.gauss1.tailN(sparkN)} max={window.MCCB.MAX_MAG} />
       </div>
       <div className="row" style={{ padding: '0 12px 12px', gap: 8 }}>
         <button className="btn btn-secondary btn-sm" style={{ flex: 1, minHeight: 40 }} onClick={() => onConfigure(well.num, 'electric')}>Configure</button>
