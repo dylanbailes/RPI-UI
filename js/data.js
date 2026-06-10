@@ -66,7 +66,7 @@ return lut;
 }
 // TODO: Replace these with your real calibration dictionaries
 const PWM_TO_GAUSS  = generatePlaceholderLut(50.0);
-const PWM_TO_EFIELD = generatePlaceholderLut(1.5);
+const PWM_TO_EFIELD = generatePlaceholderLut(MAX_EFIELD);
 function buildReverseLut(forwardLut) {
 const reverse = [];
 const keys = Object.keys(forwardLut).map(Number).sort((a, b) => a - b);
