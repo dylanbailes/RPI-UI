@@ -79,7 +79,7 @@ bool lutCalibrated = false;
 // --- ADC Calibration State ---
 esp_adc_cal_characteristics_t adc_chars;
 float adcZeroOffset_mV = 0.0f;
-float ADC_CAL = 1.0f;
+float ADC_CAL = 1.6f;
 
 // ==============================================================================
 // ============================== HELPER FUNCTIONS ==============================
