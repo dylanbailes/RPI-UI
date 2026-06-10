@@ -21,7 +21,7 @@ from one ser.read()) no longer trigger 50 back-to-back React re-renders.
 (function () {
 'use strict';
 // ---- Safety limits ------------------------------------------------------
-const MAX_EFIELD = 5.0;    // V  (V_saline across the saline load; adjust to your expected range)
+const MAX_EFIELD = 3.0;    // V/cm  (electric field limit across saline)
 const MAX_MAG    = 50.0;   // Gauss
 // At 2 kHz, 4 000 samples = 2 seconds exactly.
 const RMS_WINDOW = 4000;   // samples in the RMS sliding window
@@ -31,7 +31,7 @@ const HISTORY    = 10000;
 // 1 000 samples @ 2 kHz = 0.5 s — short enough to see high-frequency waves.
 // The ring retains the full HISTORY so the window can be widened without loss.
 const CHART_WINDOW = 1000;
-const ELECTRODE_GAP_CM = 0.5;
+const ELECTRODE_GAP_CM = 1.6;  // cm — distance between electrodes
 
 // ---- Electrode voltage conversion constants --------------------------------
 // The CS pin outputs a voltage proportional to electrode current.
@@ -252,11 +252,11 @@ _ingest(obj) {
     //   I = V_cs / 2.49 (V/A sense ratio)
     //   V_saline = I × R_parallel  where R_parallel = 47‖93 ≈ 31.221 Ω
     //   → V_saline = V_cs × CS_TO_VSALINE  (≈ ×12.538)
-    // Stored as V_saline for now; divide by ELECTRODE_GAP_CM here when
-    // you are ready to switch the graph axis to V/cm.
+    // Stored as V/cm: divide V_saline by the electrode gap (1.6 cm).
     const v_saline = obj.electrode_v * CS_TO_VSALINE;
-    if (isFinite(v_saline) && v_saline >= 0) {
-      this.history.efield.push(v_saline);
+    const efield   = v_saline / ELECTRODE_GAP_CM;
+    if (isFinite(efield) && efield >= 0) {
+      this.history.efield.push(efield);
       this.measEfield = this.history.efield.last;
     }
   }
