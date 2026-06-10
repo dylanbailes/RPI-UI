@@ -203,6 +203,10 @@ void calibrateMagneticLut() {
     float pct = i * 5.0;
     calPoints[numPoints].pwm   = pct;
     calPoints[numPoints].gauss = measureGaussAtPwm(pct);
+    Serial.print("CAL_PT ");
+    Serial.print(pct, 1);
+    Serial.print(" ");
+    Serial.println(calPoints[numPoints].gauss, 2);
     numPoints++;
   }
   
@@ -213,6 +217,12 @@ void calibrateMagneticLut() {
   if (peakIdx < numPoints - 1) {
     numPoints = peakIdx + 1;
   }
+  Serial.print("CAL_SWEEP_DONE points=");
+  Serial.print(numPoints);
+  Serial.print(" peakPwm=");
+  Serial.print(calPoints[numPoints-1].pwm, 1);
+  Serial.print(" peakGauss=");
+  Serial.println(calPoints[numPoints-1].gauss, 2);
   
   bool needsRefinement = true;
   while (needsRefinement && numPoints < 200) {
@@ -230,6 +240,14 @@ void calibrateMagneticLut() {
     if (needsRefinement && insertIdx != -1) {
       float midPwm   = (calPoints[insertIdx].pwm   + calPoints[insertIdx+1].pwm)   / 2.0;
       float midGauss = measureGaussAtPwm(midPwm);
+      Serial.print("CAL_REFINE pwm=");
+      Serial.print(midPwm, 2);
+      Serial.print(" gauss=");
+      Serial.print(midGauss, 2);
+      Serial.print(" gap=");
+      Serial.print(maxDiff, 2);
+      Serial.print(" n=");
+      Serial.println(numPoints + 1);
       for (int i = numPoints; i > insertIdx+1; i--) {
         calPoints[i] = calPoints[i-1];
       }
@@ -237,6 +255,9 @@ void calibrateMagneticLut() {
       calPoints[insertIdx+1].gauss = midGauss;
       numPoints++;
     }
+  }
+  if (numPoints >= 200) {
+    Serial.println("CAL_WARN refinement hit 200-point cap (noisy readings?)");
   }
   
   float peakPwm   = calPoints[numPoints-1].pwm;
