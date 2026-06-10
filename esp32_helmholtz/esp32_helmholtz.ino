@@ -75,6 +75,7 @@ Point calPoints[1000];
 bool isCalibrating = false;
 float helmLut[1001];
 bool lutCalibrated = false;
+float calPolarity = 1.0f; // +1 normal, -1 for coils wired backward (auto-detected)
 
 // --- ADC Calibration State ---
 esp_adc_cal_characteristics_t adc_chars;
@@ -189,7 +190,7 @@ float measureGaussAtPwm(float pwmPercent) {
   }
   float rawAvg = (float)sum1 / 400;
   float gauss  = (rawAvg - he1ZeroOffset) / COUNTS_PER_GAUSS;
-  return gauss;
+  return gauss * calPolarity;
 }
 
 void calibrateMagneticLut() {
@@ -197,6 +198,22 @@ void calibrateMagneticLut() {
   isCalibrating = true;
   ledcWrite(ELEC_IN1_PIN, 0); ledcWrite(ELEC_IN2_PIN, 0);
   Serial.println("CAL_START");
+  
+  // --- Polarity probe: some coils are wired backward and read negative field ---
+  calPolarity = 1.0f; // reset so the probe reads the true sign
+  float probeGauss = measureGaussAtPwm(65.0);
+  if (fabs(probeGauss) < 1.0f) {
+    Serial.print("CAL_WARN polarity probe weak (");
+    Serial.print(probeGauss, 2);
+    Serial.println(" G at 40% PWM) - sensor disconnected? Assuming normal polarity");
+  } else if (probeGauss < 0.0f) {
+    calPolarity = -1.0f;
+    Serial.print("CAL_POLARITY REVERSED (probe read ");
+    Serial.print(probeGauss, 2);
+    Serial.println(" G, negating all calibration readings)");
+  } else {
+    Serial.println("CAL_POLARITY NORMAL");
+  }
   
   int numPoints = 0;
   for (int i = 0; i <= 20; i++) {
