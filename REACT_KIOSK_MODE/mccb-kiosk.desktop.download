@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=MCCB Kiosk
+Comment=MCCB Controller — full-screen kiosk browser
+# The script waits for the backend to be ready before opening Chromium
+Exec=/home/pi/mccb/start_kiosk.sh
+X-GNOME-Autostart-enabled=true
+# Don't show in application menus
+NoDisplay=true

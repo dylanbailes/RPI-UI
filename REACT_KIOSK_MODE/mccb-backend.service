@@ -1,0 +1,37 @@
+[Unit]
+Description=MCCB Controller Backend (FastAPI/uvicorn)
+After=network.target
+# Restart if the process crashes — critical for lab equipment
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+
+# ── Edit this path if your app lives somewhere else ──────────────────────────
+WorkingDirectory=/home/pi/mccb
+ExecStart=/home/pi/mccb/venv/bin/uvicorn backend:app --host 0.0.0.0 --port 8000
+# ─────────────────────────────────────────────────────────────────────────────
+
+Restart=on-failure
+RestartSec=5s
+
+# Give serial/USB devices time to enumerate before the process starts
+ExecStartPre=/bin/sleep 3
+
+# Serial port access — pi user must also be in 'dialout' group (see install.sh)
+SupplementaryGroups=dialout video
+
+# Clean environment — explicit PATH avoids venv confusion
+Environment=PATH=/home/pi/mccb/venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+
+# Log to journald — view with: journalctl -u mccb-backend -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mccb-backend
+
+[Install]
+WantedBy=multi-user.target

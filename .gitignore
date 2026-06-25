@@ -1,0 +1,79 @@
+# =============================================================================
+# Node.js / React / Vite (CRITICAL for your JS folder)
+# =============================================================================
+node_modules/
+.pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.vite/
+js/dist/
+js/build/
+
+# =============================================================================
+# Python Virtual Environments & Bytecode
+# =============================================================================
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# =============================================================================
+# Distribution / Packaging / Build Outputs
+# =============================================================================
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# =============================================================================
+# Environment Variables & Secrets
+# =============================================================================
+.env
+.env.local
+.env.*.local
+
+# =============================================================================
+# IDE, Editor, and OS Files
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+
+# =============================================================================
+# Logs, Temporary Files, and App-Specific Data
+# =============================================================================
+*.log
+backend.log
+*.tmp
+*.temp
+.ipynb_checkpoints
+
+# Optional: If you ever save test snapshots in the repo directory
+snapshots/
+*.png
+*.jpg
